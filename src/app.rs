@@ -497,10 +497,16 @@ impl App {
                 panes: self.pick_panes(4),
                 focused_pane: 0,
             });
-        } else if count >= 2 {
+        } else if count == 3 {
+            self.split = Some(SplitState {
+                layout: SplitLayout::Triple,
+                panes: self.pick_panes(3),
+                focused_pane: 0,
+            });
+        } else if count == 2 {
             self.split = Some(SplitState {
                 layout: SplitLayout::Vertical2,
-                panes: self.pick_panes(count.min(self.tabs.len())),
+                panes: self.pick_panes(2),
                 focused_pane: 0,
             });
         }
