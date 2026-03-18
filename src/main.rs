@@ -5,6 +5,8 @@ mod config;
 mod filter;
 mod terminal;
 mod ui;
+#[cfg(feature = "api")]
+mod updater;
 
 use std::borrow::Cow;
 use std::io;
@@ -28,10 +30,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         original_hook(panic);
     }));
 
-    // ── --install: auto-instala no PATH ─────────────────────────────────
-    if std::env::args().any(|a| a == "--install") {
+    // ── CLI args ──────────────────────────────────────────────────────
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--install") {
         return self_install();
     }
+
+    if args.iter().any(|a| a == "--version" || a == "-v") {
+        #[cfg(feature = "api")]
+        eprintln!("gate v{}", updater::current_version());
+        #[cfg(not(feature = "api"))]
+        eprintln!("gate v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    #[cfg(feature = "api")]
+    if args.iter().any(|a| a == "--update") {
+        return updater::run_update().map_err(|e| e.into());
+    }
+
+    // ── Check de update silencioso ──────────────────────────────────────
+    #[cfg(feature = "api")]
+    updater::check_update_quiet();
 
     let mut config = Config::load()?;
     #[cfg(feature = "api")]

@@ -103,7 +103,7 @@ fn draw_titlebar(frame: &mut Frame, area: Rect, app: &App) {
 
     let title = Line::from(vec![
         Span::styled(
-            " SoureiGate",
+            format!(" SoureiGate v{}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" > "),
