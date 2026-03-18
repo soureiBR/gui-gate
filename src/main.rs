@@ -327,6 +327,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.toggle_broadcast();
                                 continue;
                             }
+                            KeyCode::F(6) => {
+                                let cmd = b"htop\n";
+                                if app.broadcast {
+                                    app.write_input_all(cmd);
+                                } else if let Some(session) = app.active_session_mut() {
+                                    session.write_input(cmd.to_vec());
+                                }
+                                continue;
+                            }
+                            KeyCode::F(7) => {
+                                let cmd = b"docker ps -a\n";
+                                if app.broadcast {
+                                    app.write_input_all(cmd);
+                                } else if let Some(session) = app.active_session_mut() {
+                                    session.write_input(cmd.to_vec());
+                                }
+                                continue;
+                            }
+                            KeyCode::F(8) => {
+                                let cmd = b"journalctl -f --no-pager\n";
+                                if app.broadcast {
+                                    app.write_input_all(cmd);
+                                } else if let Some(session) = app.active_session_mut() {
+                                    session.write_input(cmd.to_vec());
+                                }
+                                continue;
+                            }
                             _ => {}
                         }
 
@@ -334,6 +361,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match key.code {
                                 KeyCode::Char('b') => {
                                     app.switch_to_browse();
+                                    continue;
+                                }
+                                KeyCode::Char('p') => {
+                                    app.open_palette();
                                     continue;
                                 }
                                 KeyCode::Char('w') => {
@@ -387,6 +418,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     },
 
+                    AppMode::Palette => match key.code {
+                        KeyCode::Esc => app.close_palette(),
+                        KeyCode::Enter => {
+                            app.palette_execute();
+                            if app.mode == AppMode::Terminal {
+                                terminal.clear()?;
+                            }
+                        }
+                        KeyCode::Up => app.palette_move_up(),
+                        KeyCode::Down => app.palette_move_down(),
+                        KeyCode::Backspace => app.palette_backspace(),
+                        KeyCode::Char(c) => app.palette_push(c),
+                        _ => {}
+                    },
+
                     AppMode::Browse => {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -397,6 +443,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if ctrl {
                             match key.code {
                                 KeyCode::Char('c') => break,
+                                KeyCode::Char('p') => { app.open_palette(); continue; }
                                 KeyCode::Char('t') => { app.switch_to_terminal(); continue; }
                                 #[cfg(feature = "api")]
                                 KeyCode::Char('l') => { app.logout(); break; }

@@ -47,6 +47,27 @@ pub enum AppMode {
     Terminal,
     /// Popup de detalhes do servidor
     Detail,
+    /// Command palette overlay
+    Palette,
+}
+
+pub struct PaletteItem {
+    pub label: String,
+    pub description: String,
+    pub action: PaletteAction,
+}
+
+pub enum PaletteAction {
+    Connect(Server),
+    SwitchTab(usize),
+    ToggleSplit,
+    ToggleBroadcast,
+    #[cfg(feature = "api")]
+    Refresh,
+    #[cfg(feature = "api")]
+    Logout,
+    CopyIp(String),
+    RunCommand(String),
 }
 
 pub struct App {
@@ -96,6 +117,12 @@ pub struct App {
     // Split terminal
     pub split: Option<SplitState>,
 
+    // Command palette
+    pub palette_query: String,
+    pub palette_items: Vec<PaletteItem>,
+    pub palette_filtered: Vec<usize>,
+    pub palette_index: usize,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -135,6 +162,10 @@ impl App {
             mouse_tab_bar: None,
             broadcast: false,
             split: None,
+            palette_query: String::new(),
+            palette_items: Vec::new(),
+            palette_filtered: Vec::new(),
+            palette_index: 0,
             #[cfg(feature = "api")]
             api_client: None,
         };
@@ -339,6 +370,9 @@ impl App {
                 }
             }
             AppMode::Terminal => {}
+            AppMode::Palette => {
+                self.close_palette();
+            }
         }
     }
 
@@ -666,6 +700,210 @@ impl App {
     }
 
 
+    // ─── Command Palette ──────────────────────────────────────────────
+
+    pub fn open_palette(&mut self) {
+        self.palette_query.clear();
+        self.palette_items.clear();
+        self.palette_index = 0;
+
+        // All servers from all categories
+        for cat in &self.config.categories {
+            for server in &cat.servers {
+                self.palette_items.push(PaletteItem {
+                    label: format!("Connect: {} ({})", server.name, server.display_addr()),
+                    description: cat.name.clone(),
+                    action: PaletteAction::Connect(server.clone()),
+                });
+            }
+        }
+
+        // All open tabs
+        for (i, tab) in self.tabs.iter().enumerate() {
+            self.palette_items.push(PaletteItem {
+                label: format!("Tab: {}", tab.name),
+                description: format!("Switch to tab {}", i + 1),
+                action: PaletteAction::SwitchTab(i),
+            });
+        }
+
+        // Actions
+        self.palette_items.push(PaletteItem {
+            label: "Split: Toggle".to_string(),
+            description: "Toggle split terminal layout".to_string(),
+            action: PaletteAction::ToggleSplit,
+        });
+        self.palette_items.push(PaletteItem {
+            label: "Broadcast: Toggle".to_string(),
+            description: "Toggle broadcast mode".to_string(),
+            action: PaletteAction::ToggleBroadcast,
+        });
+
+        #[cfg(feature = "api")]
+        if self.is_api_mode() {
+            self.palette_items.push(PaletteItem {
+                label: "Refresh servers".to_string(),
+                description: "Reload servers from API".to_string(),
+                action: PaletteAction::Refresh,
+            });
+            self.palette_items.push(PaletteItem {
+                label: "Logout".to_string(),
+                description: "Logout and exit".to_string(),
+                action: PaletteAction::Logout,
+            });
+        }
+
+        // Quick commands
+        self.palette_items.push(PaletteItem {
+            label: "Run: htop".to_string(),
+            description: "Run htop in active terminal".to_string(),
+            action: PaletteAction::RunCommand("htop".to_string()),
+        });
+        self.palette_items.push(PaletteItem {
+            label: "Run: docker ps".to_string(),
+            description: "Run docker ps -a in active terminal".to_string(),
+            action: PaletteAction::RunCommand("docker ps -a".to_string()),
+        });
+        self.palette_items.push(PaletteItem {
+            label: "Run: journalctl -f".to_string(),
+            description: "Run journalctl -f --no-pager in active terminal".to_string(),
+            action: PaletteAction::RunCommand("journalctl -f --no-pager".to_string()),
+        });
+
+        // Copy IP for all servers
+        for cat in &self.config.categories {
+            for server in &cat.servers {
+                if !server.host.is_empty() {
+                    self.palette_items.push(PaletteItem {
+                        label: format!("Copy IP: {} ({})", server.name, server.host),
+                        description: cat.name.clone(),
+                        action: PaletteAction::CopyIp(server.host.clone()),
+                    });
+                }
+            }
+        }
+
+        self.palette_filtered = (0..self.palette_items.len()).collect();
+        self.mode = AppMode::Palette;
+    }
+
+    pub fn palette_filter(&mut self) {
+        let query = self.palette_query.to_lowercase();
+        if query.is_empty() {
+            self.palette_filtered = (0..self.palette_items.len()).collect();
+        } else {
+            self.palette_filtered = self.palette_items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    let haystack = format!("{} {}", item.label, item.description).to_lowercase();
+                    query.split_whitespace().all(|word| haystack.contains(word))
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+        if self.palette_index >= self.palette_filtered.len() {
+            self.palette_index = 0;
+        }
+    }
+
+    pub fn palette_push(&mut self, c: char) {
+        self.palette_query.push(c);
+        self.palette_filter();
+    }
+
+    pub fn palette_backspace(&mut self) {
+        self.palette_query.pop();
+        self.palette_filter();
+    }
+
+    pub fn palette_move_up(&mut self) {
+        if self.palette_index > 0 {
+            self.palette_index -= 1;
+        }
+    }
+
+    pub fn palette_move_down(&mut self) {
+        if self.palette_index + 1 < self.palette_filtered.len() {
+            self.palette_index += 1;
+        }
+    }
+
+    pub fn palette_execute(&mut self) {
+        if let Some(&item_idx) = self.palette_filtered.get(self.palette_index) {
+            // We need to extract the action data before mutating self
+            // Use indices/cloned data to avoid borrow conflicts
+            let action_data = match &self.palette_items[item_idx].action {
+                PaletteAction::Connect(server) => PaletteActionData::Connect(server.clone()),
+                PaletteAction::SwitchTab(i) => PaletteActionData::SwitchTab(*i),
+                PaletteAction::ToggleSplit => PaletteActionData::ToggleSplit,
+                PaletteAction::ToggleBroadcast => PaletteActionData::ToggleBroadcast,
+                #[cfg(feature = "api")]
+                PaletteAction::Refresh => PaletteActionData::Refresh,
+                #[cfg(feature = "api")]
+                PaletteAction::Logout => PaletteActionData::Logout,
+                PaletteAction::CopyIp(ip) => PaletteActionData::CopyIp(ip.clone()),
+                PaletteAction::RunCommand(cmd) => PaletteActionData::RunCommand(cmd.clone()),
+            };
+
+            self.close_palette();
+
+            match action_data {
+                PaletteActionData::Connect(server) => {
+                    self.open_terminal(&server);
+                }
+                PaletteActionData::SwitchTab(i) => {
+                    if i < self.tabs.len() {
+                        self.active_tab = Some(i);
+                        self.mode = AppMode::Terminal;
+                    }
+                }
+                PaletteActionData::ToggleSplit => {
+                    self.toggle_split();
+                }
+                PaletteActionData::ToggleBroadcast => {
+                    self.toggle_broadcast();
+                }
+                #[cfg(feature = "api")]
+                PaletteActionData::Refresh => {
+                    let _ = self.refresh_from_api();
+                }
+                #[cfg(feature = "api")]
+                PaletteActionData::Logout => {
+                    self.logout();
+                }
+                PaletteActionData::CopyIp(ip) => {
+                    if copy_to_clipboard(&ip) {
+                        self.clipboard_msg = Some(format!("IP copiado: {}", ip));
+                    } else {
+                        self.clipboard_msg = Some("Falha ao copiar IP".to_string());
+                    }
+                }
+                PaletteActionData::RunCommand(cmd) => {
+                    let bytes = format!("{}\n", cmd).into_bytes();
+                    if self.broadcast {
+                        self.write_input_all(&bytes);
+                    } else if let Some(session) = self.active_session_mut() {
+                        session.write_input(bytes);
+                    }
+                    if self.active_tab.is_some() {
+                        self.mode = AppMode::Terminal;
+                    }
+                }
+            }
+        } else {
+            self.close_palette();
+        }
+    }
+
+    pub fn close_palette(&mut self) {
+        self.mode = AppMode::Browse;
+        self.palette_query.clear();
+        self.palette_items.clear();
+        self.palette_filtered.clear();
+        self.palette_index = 0;
+    }
+
     // ─── API ─────────────────────────────────────────────────────────
 
     #[cfg(feature = "api")]
@@ -806,6 +1044,21 @@ impl App {
             self.sync_category_from_sidebar();
         }
     }
+}
+
+// ── Internal helper for palette execution (avoids borrow conflicts) ──────────
+
+enum PaletteActionData {
+    Connect(Server),
+    SwitchTab(usize),
+    ToggleSplit,
+    ToggleBroadcast,
+    #[cfg(feature = "api")]
+    Refresh,
+    #[cfg(feature = "api")]
+    Logout,
+    CopyIp(String),
+    RunCommand(String),
 }
 
 // ── Clipboard helper ─────────────────────────────────────────────────────────

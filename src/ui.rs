@@ -13,7 +13,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line as TermLine};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 
-use crate::app::{App, AppMode, SidebarFocus, SidebarItem, SplitLayout};
+use crate::app::{App, AppMode, SidebarFocus, SidebarItem, SplitLayout, PaletteItem};
 use crate::terminal::TerminalSession;
 
 // ── Paleta ────────────────────────────────────────────────────────────────────
@@ -155,6 +155,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_detail_popup(frame, area, server);
         }
     }
+
+    // Palette popup overlay
+    if app.mode == AppMode::Palette {
+        draw_palette(frame, area, app);
+    }
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
@@ -235,7 +240,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if (app.mode == AppMode::Browse || app.mode == AppMode::Detail)
+    let border_color = if (app.mode == AppMode::Browse || app.mode == AppMode::Detail || app.mode == AppMode::Palette)
         && app.sidebar_focus == SidebarFocus::Sidebar
     {
         ACTIVE_BORDER
@@ -1034,6 +1039,110 @@ fn draw_detail_popup(frame: &mut Frame, area: Rect, server: &crate::config::Serv
     frame.render_widget(paragraph, popup_area);
 }
 
+// ── Command Palette ───────────────────────────────────────────────────────────
+
+fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
+    let popup_w = (area.width as f32 * 0.70) as u16;
+    let popup_h = (area.height as f32 * 0.50) as u16;
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+    // Clear background
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(24, 24, 37))),
+        popup_area,
+    );
+
+    let result_count = app.palette_filtered.len();
+    let block = Block::default()
+        .title(Span::styled(
+            " Command Palette ",
+            Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(format!(" {} resultados ", result_count))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(MAUVE))
+        .style(Style::default().bg(Color::Rgb(24, 24, 37)));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+
+    // Layout: search input (1 line) + results list
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    // Search input
+    let input_line = Line::from(vec![
+        Span::styled(" > ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(&app.palette_query, Style::default().fg(TEXT)),
+        Span::styled("_", Style::default().fg(ACCENT)),
+    ]);
+    frame.render_widget(Paragraph::new(input_line), chunks[0]);
+
+    // Results list
+    let list_area = chunks[1];
+    let visible_count = list_area.height as usize;
+
+    // Scroll offset to keep selected item visible
+    let scroll_offset = if app.palette_index >= visible_count {
+        app.palette_index - visible_count + 1
+    } else {
+        0
+    };
+
+    let items: Vec<ListItem> = app.palette_filtered
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_count)
+        .enumerate()
+        .map(|(display_idx, &item_idx)| {
+            let item = &app.palette_items[item_idx];
+            let is_selected = display_idx + scroll_offset == app.palette_index;
+            palette_list_item(item, is_selected)
+        })
+        .collect();
+
+    frame.render_widget(List::new(items), list_area);
+}
+
+fn palette_list_item(item: &PaletteItem, is_selected: bool) -> ListItem<'static> {
+    let style = if is_selected {
+        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let label_style = if is_selected {
+        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(ACCENT)
+    };
+
+    let desc_style = if is_selected {
+        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG)
+    } else {
+        Style::default().fg(DIMMED)
+    };
+
+    let marker = if is_selected { " > " } else { "   " };
+
+    let line = Line::from(vec![
+        Span::styled(marker.to_string(), style),
+        Span::styled(item.label.clone(), label_style),
+        Span::styled(format!("  {}", item.description), desc_style),
+    ]);
+
+    ListItem::new(line).style(style)
+}
+
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
@@ -1094,6 +1203,14 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 key_hint("F5"),
                 Span::raw(" Broadcast "),
             ]);
+            spans.extend([
+                key_hint("F6"),
+                Span::raw(" htop "),
+                key_hint("F7"),
+                Span::raw(" docker "),
+                key_hint("F8"),
+                Span::raw(" logs "),
+            ]);
             if app.broadcast {
                 spans.push(Span::styled(
                     " ● BROADCAST ",
@@ -1136,6 +1253,22 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 ),
             ])
         }
+        AppMode::Palette => Line::from(vec![
+            Span::styled(
+                " PALETTE ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(MAUVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            key_hint("Esc"),
+            Span::raw(" fechar "),
+            key_hint("Enter"),
+            Span::raw(" executar "),
+            key_hint("↑↓"),
+            Span::raw(" navegar "),
+        ]),
         AppMode::Browse => {
             let mut hints = vec![
                 key_hint("q"),
@@ -1148,6 +1281,8 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(" Info "),
                 key_hint("c"),
                 Span::raw(" Copiar "),
+                key_hint("Ctrl+P"),
+                Span::raw(" Palette "),
                 key_hint("Tab"),
                 Span::raw(" Painel "),
                 key_hint("↑↓"),
