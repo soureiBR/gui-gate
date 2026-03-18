@@ -1,0 +1,30 @@
+[package]
+name = "soureigate"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gate"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "6"
+alacritty_terminal = "0.25"
+portable-pty = "0.8"
+parking_lot = "0.12"
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false, optional = true }
+open = { version = "5", optional = true }
+
+[features]
+default = ["api"]
+api = ["dep:reqwest", "dep:open"]
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
