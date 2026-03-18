@@ -100,6 +100,12 @@ struct ApiHost {
     #[serde(default, deserialize_with = "de_to_string")]
     status: String,
     #[serde(default, deserialize_with = "de_to_string")]
+    wg_status: String,
+    #[serde(default, deserialize_with = "de_to_string")]
+    zabbix_status: String,
+    #[serde(default, deserialize_with = "de_to_string")]
+    fluentbit_status: String,
+    #[serde(default, deserialize_with = "de_to_string")]
     subnet: String,
     #[serde(flatten)]
     _extra: serde_json::Value,
@@ -435,6 +441,9 @@ fn categorize_hosts(hosts: &[ApiHost], categories: &mut Vec<Category>) {
             hostname: host.hostname.clone(),
             host_type: host.host_type.clone(),
             status: host.status.clone(),
+            wg_status: host.wg_status.clone(),
+            zabbix_status: host.zabbix_status.clone(),
+            fluentbit_status: host.fluentbit_status.clone(),
             subnet: host.subnet.clone(),
             host_name: String::new(),
         };
@@ -506,6 +515,9 @@ fn categorize_vms(vms: &[ApiVm], categories: &mut Vec<Category>) {
             hostname: vm.name.clone(),
             host_type: "vm".into(),
             status: String::new(),
+            wg_status: String::new(),
+            zabbix_status: String::new(),
+            fluentbit_status: String::new(),
             subnet: String::new(),
             host_name: vm.host_name.clone(),
         };

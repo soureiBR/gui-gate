@@ -53,6 +53,12 @@ pub struct Server {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
+    pub wg_status: String,
+    #[serde(default)]
+    pub zabbix_status: String,
+    #[serde(default)]
+    pub fluentbit_status: String,
+    #[serde(default)]
     pub subnet: String,
     #[serde(default)]
     pub host_name: String, // VM: em qual host roda

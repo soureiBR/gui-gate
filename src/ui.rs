@@ -54,6 +54,25 @@ fn status_indicator(status: &str) -> (&'static str, Color) {
     }
 }
 
+/// Monta string compacta de status dos serviços: WG ● ZBX ○ FB ○
+fn services_status(server: &crate::config::Server) -> String {
+    let wg = mini_status(&server.wg_status);
+    let zbx = mini_status(&server.zabbix_status);
+    let fb = mini_status(&server.fluentbit_status);
+    format!("WG{} ZBX{} FB{}", wg, zbx, fb)
+}
+
+fn mini_status(status: &str) -> &'static str {
+    match status.to_lowercase().as_str() {
+        "deployed" | "online" | "active" | "installed" | "registered" => "●",
+        "pending" | "deploying" | "provisioning" => "◐",
+        "error" | "failed" | "offline" => "✖",
+        "unknown" => "○",
+        "" => "—",
+        _ => "○",
+    }
+}
+
 // ── Terminal default colors (16 ANSI colors) ──────────────────────────────────
 
 /// Preto puro (ANSI Black = cinza na maioria dos temas, então usamos RGB)
@@ -330,13 +349,13 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
     let is_focused = app.mode == AppMode::Browse && app.sidebar_focus == SidebarFocus::ServerList;
 
     if is_wide && has_extra_info {
-        // ── Layout largo: Status | Nome | Mesh IP | IP Público | Subnet | User ──
+        // ── Layout largo: Status | Nome | Mesh IP | IP Público | Serviços | User ──
         let header = Row::new(vec![
             Cell::from(""),
             Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("Mesh IP").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("IP Público").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("Subnet").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Serviços").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
         .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
@@ -345,13 +364,14 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
             let style = row_style(i, app.server_index, is_focused);
             let status = status_indicator(&server.status);
+            let svc = services_status(server);
 
             Row::new(vec![
                 Cell::from(status.0).style(Style::default().fg(status.1)),
                 Cell::from(server.name.as_str()),
                 Cell::from(server.display_addr()),
                 Cell::from(if server.ip_public.is_empty() { "—" } else { &server.ip_public }),
-                Cell::from(if server.subnet.is_empty() { "—" } else { &server.subnet }),
+                Cell::from(svc),
                 Cell::from(server.user.as_str()),
             ]).style(style)
         }).collect();
@@ -359,16 +379,16 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         let status_w = 2u16;
         let user_w = 8u16;
         let pub_w = 16u16;
-        let sub_w = 18u16;
+        let svc_w = 15u16;
         let addr_w = 22u16;
-        let name_w = inner_w.saturating_sub(status_w + addr_w + pub_w + sub_w + user_w);
+        let name_w = inner_w.saturating_sub(status_w + addr_w + pub_w + svc_w + user_w);
 
         let table = Table::new(rows, [
             Constraint::Length(status_w),
             Constraint::Length(name_w),
             Constraint::Length(addr_w),
             Constraint::Length(pub_w),
-            Constraint::Length(sub_w),
+            Constraint::Length(svc_w),
             Constraint::Length(user_w),
         ]).header(header).block(block);
 
