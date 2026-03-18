@@ -765,6 +765,9 @@ fn draw_split_terminal_by_ref(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let broadcast = app.broadcast;
     for (pane_idx, &tab_idx) in panes.iter().enumerate() {
+        if pane_idx >= pane_areas.len() {
+            break;
+        }
         if tab_idx < app.tabs.len() {
             let is_focused = pane_idx == focused;
             let session = &app.tabs[tab_idx];
