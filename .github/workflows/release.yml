@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i'' "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          awk -v ver="$VERSION" '/^version = /{$0="version = \""ver"\""}1' Cargo.toml > tmp && mv tmp Cargo.toml
           echo "Building version: $VERSION"
 
       - name: Build
