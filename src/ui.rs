@@ -18,16 +18,30 @@ use crate::terminal::TerminalSession;
 
 // ── Paleta ────────────────────────────────────────────────────────────────────
 
-const ACTIVE_BORDER: Color = Color::Cyan;
-const INACTIVE_BORDER: Color = Color::DarkGray;
-const HIGHLIGHT_BG: Color = Color::Rgb(38, 79, 120);
-const HIGHLIGHT_FG: Color = Color::White;
-const HEADER_BG: Color = Color::Rgb(0, 0, 0);
-const STATUS_BG: Color = Color::Rgb(0, 122, 204);
-const TAB_ACTIVE_BG: Color = Color::Rgb(30, 30, 46);
-const TAB_ACTIVE_FG: Color = Color::Cyan;
-const TAB_BG: Color = Color::Rgb(20, 20, 30);
-const TAB_FG: Color = Color::DarkGray;
+// ── Paleta — dark theme inspirado no Catppuccin Mocha ─────────────────────────
+
+const ACTIVE_BORDER: Color = Color::Rgb(137, 180, 250);  // Lavender
+const INACTIVE_BORDER: Color = Color::Rgb(69, 71, 90);   // Surface1
+const HIGHLIGHT_BG: Color = Color::Rgb(49, 50, 68);      // Surface0
+const HIGHLIGHT_FG: Color = Color::Rgb(205, 214, 244);   // Text
+const HEADER_BG: Color = Color::Rgb(17, 17, 27);         // Crust
+const STATUS_BG: Color = Color::Rgb(30, 30, 46);         // Base
+const TAB_ACTIVE_BG: Color = Color::Rgb(49, 50, 68);     // Surface0
+const TAB_ACTIVE_FG: Color = Color::Rgb(137, 180, 250);  // Lavender
+const TAB_BG: Color = Color::Rgb(24, 24, 37);            // Mantle
+const TAB_FG: Color = Color::Rgb(88, 91, 112);           // Overlay0
+
+const ACCENT: Color = Color::Rgb(137, 180, 250);         // Lavender
+const TEXT: Color = Color::Rgb(205, 214, 244);            // Text
+const SUBTEXT: Color = Color::Rgb(166, 173, 200);        // Subtext0
+const DIMMED: Color = Color::Rgb(108, 112, 134);         // Overlay1
+const SURFACE: Color = Color::Rgb(49, 50, 68);           // Surface0
+const GREEN: Color = Color::Rgb(166, 227, 161);          // Green
+const YELLOW: Color = Color::Rgb(249, 226, 175);         // Yellow
+const RED: Color = Color::Rgb(243, 139, 168);            // Red
+const PEACH: Color = Color::Rgb(250, 179, 135);          // Peach
+const MAUVE: Color = Color::Rgb(203, 166, 247);          // Mauve
+const TEAL: Color = Color::Rgb(148, 226, 213);           // Teal
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,38 +52,38 @@ fn row_style(index: usize, selected: usize, is_focused: bool) -> Style {
             .bg(HIGHLIGHT_BG)
             .add_modifier(Modifier::BOLD)
     } else if index == selected {
-        Style::default().fg(Color::White).bg(Color::Rgb(50, 50, 50))
+        Style::default().fg(TEXT).bg(Color::Rgb(40, 40, 55))
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(SUBTEXT)
     }
 }
 
 fn status_indicator(status: &str) -> (&'static str, Color) {
     match status.to_lowercase().as_str() {
-        "deployed" | "online" | "running" | "active" => ("●", Color::Green),
-        "pending" | "deploying" | "provisioning" => ("◐", Color::Yellow),
-        "error" | "failed" | "offline" | "stopped" => ("●", Color::Red),
-        "" => (" ", Color::DarkGray),
-        _ => ("○", Color::DarkGray),
+        "deployed" | "online" | "running" | "active" => ("●", GREEN),
+        "pending" | "deploying" | "provisioning" => ("◐", YELLOW),
+        "error" | "failed" | "offline" | "stopped" => ("●", RED),
+        "" => ("·", DIMMED),
+        _ => ("○", DIMMED),
     }
 }
 
-/// Monta string compacta de status dos serviços: WG ● ZBX ○ FB ○
+/// Monta string compacta de serviços com indicadores
 fn services_status(server: &crate::config::Server) -> String {
-    let wg = mini_status(&server.wg_status);
-    let zbx = mini_status(&server.zabbix_status);
-    let fb = mini_status(&server.fluentbit_status);
-    format!("WG{} ZBX{} FB{}", wg, zbx, fb)
+    let wg = svc_char(&server.wg_status);
+    let zbx = svc_char(&server.zabbix_status);
+    let fb = svc_char(&server.fluentbit_status);
+    format!("WG{} ZB{} FB{}", wg, zbx, fb)
 }
 
-fn mini_status(status: &str) -> &'static str {
+fn svc_char(status: &str) -> &'static str {
     match status.to_lowercase().as_str() {
-        "deployed" | "online" | "active" | "installed" | "registered" => "●",
-        "pending" | "deploying" | "provisioning" => "◐",
-        "error" | "failed" | "offline" => "✖",
-        "unknown" => "○",
-        "" => "—",
-        _ => "○",
+        "deployed" | "online" | "active" | "installed" | "registered" => "✓",
+        "pending" | "deploying" | "provisioning" => "~",
+        "error" | "failed" | "offline" => "✗",
+        "unknown" => "?",
+        "" => "-",
+        _ => "?",
     }
 }
 
@@ -115,9 +129,9 @@ fn ansi_to_ratatui(color: AnsiColor, is_fg: bool) -> Color {
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Pinta TODO o frame de preto puro (Rgb evita o "cinza" do ANSI Black)
+    // Pinta TODO o frame com a cor base do tema
     frame.render_widget(
-        Block::default().style(Style::default().bg(Color::Rgb(0, 0, 0))),
+        Block::default().style(Style::default().bg(Color::Rgb(17, 17, 27))),
         area,
     );
 
@@ -145,13 +159,20 @@ fn draw_titlebar(frame: &mut Frame, area: Rect, app: &App) {
         .map(|c| c.name.as_str())
         .unwrap_or("");
 
+    let server_count: usize = app.config.categories.iter().map(|c| c.servers.len()).sum();
+
     let title = Line::from(vec![
+        Span::styled(" ◆ ", Style::default().fg(MAUVE).add_modifier(Modifier::BOLD)),
         Span::styled(
-            format!(" SoureiGate v{}", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            format!("SoureiGate v{}", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" > "),
-        Span::styled(cat_name, Style::default().fg(Color::Yellow)),
+        Span::styled(" │ ", Style::default().fg(DIMMED)),
+        Span::styled(cat_name, Style::default().fg(PEACH)),
+        Span::styled(
+            format!("  {} servidores", server_count),
+            Style::default().fg(DIMMED),
+        ),
     ]);
 
     frame.render_widget(
@@ -199,10 +220,31 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let block = Block::default()
-        .title(" Categories ")
+        .title(Span::styled(" Navigator ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().bg(Color::Rgb(24, 24, 37)));
+
+    let type_icon = |ht: &str| -> &str {
+        match ht {
+            "pve" => "▪",
+            "bm" => "▪",
+            "pbs" => "▪",
+            "monitor" => "▪",
+            _ => "▪",
+        }
+    };
+
+    let type_color = |ht: &str| -> Color {
+        match ht {
+            "pve" => ACCENT,
+            "bm" => PEACH,
+            "pbs" => TEAL,
+            "monitor" => YELLOW,
+            _ => DIMMED,
+        }
+    };
 
     let items: Vec<ListItem> = app
         .sidebar_items
@@ -213,43 +255,66 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
                 && app.mode == AppMode::Browse
                 && app.sidebar_focus == SidebarFocus::Sidebar;
 
-            let (text, indent) = match item {
+            match item {
                 SidebarItem::Category(ci) => {
                     let cat = &app.config.categories[*ci];
-                    (format!("{} ({})", cat.name, cat.servers.len()), false)
+                    // Detecta host_type do primeiro servidor da categoria
+                    let ht = cat.servers.first().map(|s| s.host_type.as_str()).unwrap_or("");
+                    let icon_color = type_color(ht);
+                    let count = cat.servers.len();
+
+                    let style = if is_selected {
+                        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(SUBTEXT)
+                    };
+
+                    let marker = if is_selected { "▸ " } else { "  " };
+                    let line = Line::from(vec![
+                        Span::raw(marker),
+                        Span::styled(type_icon(ht), Style::default().fg(icon_color)),
+                        Span::raw(" "),
+                        Span::styled(cat.name.as_str(), style),
+                        Span::styled(format!(" {}", count), Style::default().fg(DIMMED)),
+                    ]);
+                    ListItem::new(line).style(style)
                 }
                 SidebarItem::GroupHeader { prefix, expanded, count } => {
                     let arrow = if *expanded { "▾" } else { "▸" };
-                    (format!("{} {} ({})", arrow, prefix, count), false)
+                    let style = if is_selected {
+                        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(MAUVE)
+                    };
+                    let marker = if is_selected { "▸ " } else { "  " };
+                    let line = Line::from(vec![
+                        Span::raw(marker),
+                        Span::styled(format!("{} ", arrow), Style::default().fg(MAUVE)),
+                        Span::styled(prefix.as_str(), style),
+                        Span::styled(format!(" {}", count), Style::default().fg(DIMMED)),
+                    ]);
+                    ListItem::new(line).style(style)
                 }
                 SidebarItem::GroupChild(ci) => {
                     let cat = &app.config.categories[*ci];
-                    // Remove prefixo "VMs > " do nome
                     let short_name = cat.name.strip_prefix("VMs > ").unwrap_or(&cat.name);
-                    (format!("{} ({})", short_name, cat.servers.len()), true)
+                    let count = cat.servers.len();
+
+                    let style = if is_selected {
+                        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(DIMMED)
+                    };
+                    let marker = if is_selected { "  ▸ " } else { "    " };
+                    let line = Line::from(vec![
+                        Span::raw(marker),
+                        Span::styled("◦ ", Style::default().fg(MAUVE)),
+                        Span::styled(short_name, style),
+                        Span::styled(format!(" {}", count), Style::default().fg(Color::Rgb(69, 71, 90))),
+                    ]);
+                    ListItem::new(line).style(style)
                 }
-            };
-
-            let prefix = if is_selected {
-                if indent { "  ▸ " } else { "▸ " }
-            } else if indent {
-                "    "
-            } else {
-                "  "
-            };
-
-            let style = if is_selected {
-                Style::default()
-                    .fg(HIGHLIGHT_FG)
-                    .bg(HIGHLIGHT_BG)
-                    .add_modifier(Modifier::BOLD)
-            } else if indent {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-
-            ListItem::new(format!("{}{}", prefix, text)).style(style)
+            }
         })
         .collect();
 
@@ -358,7 +423,7 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
             Cell::from("Serviços").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
-        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .style(Style::default().fg(ACCENT).bg(HEADER_BG))
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
@@ -401,7 +466,7 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
             Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
-        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .style(Style::default().fg(ACCENT).bg(HEADER_BG))
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
@@ -436,7 +501,7 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
             Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
-        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .style(Style::default().fg(ACCENT).bg(HEADER_BG))
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
@@ -491,7 +556,7 @@ fn draw_global_search(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from("Categoria").style(Style::default().add_modifier(Modifier::BOLD)),
     ])
-    .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+    .style(Style::default().fg(ACCENT).bg(HEADER_BG))
     .height(1);
 
     let rows: Vec<Row> = app
@@ -770,8 +835,8 @@ fn key_hint(k: &str) -> Span<'static> {
     Span::styled(
         format!(" {k} "),
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Rgb(200, 200, 200))
+            .fg(Color::Rgb(17, 17, 27))
+            .bg(ACCENT)
             .add_modifier(Modifier::BOLD),
     )
 }
