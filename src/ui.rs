@@ -944,6 +944,18 @@ fn split_layout_rects(area: Rect, layout: SplitLayout) -> Vec<Rect> {
                 .split(area);
             vec![chunks[0], chunks[1]]
         }
+        SplitLayout::Triple => {
+            // 1 top full width + 2 bottom side by side
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            let bot = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[1]);
+            vec![rows[0], bot[0], bot[1]]
+        }
         SplitLayout::Quad => {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
@@ -1373,6 +1385,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 let layout_name = match split.layout {
                     SplitLayout::Vertical2 => "V-Split",
                     SplitLayout::Horizontal2 => "H-Split",
+                    SplitLayout::Triple => "Triple",
                     SplitLayout::Quad => "Quad",
                 };
                 spans.push(Span::styled(

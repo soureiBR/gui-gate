@@ -189,6 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (pane_w, pane_h) = match split.layout {
                         SplitLayout::Vertical2 => (term_cols / 2 - 1, term_rows - 2),
                         SplitLayout::Horizontal2 => (term_cols - 2, term_rows / 2 - 1),
+                        SplitLayout::Triple => (term_cols / 2 - 1, term_rows / 2 - 1),
                         SplitLayout::Quad => (term_cols / 2 - 1, term_rows / 2 - 1),
                     };
                     let pane_indices: Vec<usize> = split.panes.clone();
@@ -338,6 +339,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (pane_w, pane_h) = match split.layout {
                                         SplitLayout::Vertical2 => (term_cols / 2 - 1, term_rows - 2),
                                         SplitLayout::Horizontal2 => (term_cols - 2, term_rows / 2 - 1),
+                                        SplitLayout::Triple => (term_cols / 2 - 1, term_rows / 2 - 1),
                                         SplitLayout::Quad => (term_cols / 2 - 1, term_rows / 2 - 1),
                                     };
                                     let pane_indices: Vec<usize> = split.panes.clone();

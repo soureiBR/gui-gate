@@ -8,6 +8,7 @@ use crate::terminal::TerminalSession;
 pub enum SplitLayout {
     Vertical2,   // left | right
     Horizontal2, // top / bottom
+    Triple,      // 1 top + 2 bottom
     Quad,        // 2x2 grid
 }
 
@@ -485,8 +486,23 @@ impl App {
                     .and_then(|&real| self.current_servers().get(real).cloned())
             })
             .collect();
+        let count = servers.len();
         for server in &servers {
             self.open_terminal(server);
+        }
+        // Auto-split baseado na quantidade conectada
+        if count >= 4 {
+            self.split = Some(SplitState {
+                layout: SplitLayout::Quad,
+                panes: self.pick_panes(4),
+                focused_pane: 0,
+            });
+        } else if count >= 2 {
+            self.split = Some(SplitState {
+                layout: SplitLayout::Vertical2,
+                panes: self.pick_panes(count.min(self.tabs.len())),
+                focused_pane: 0,
+            });
         }
     }
 
@@ -789,6 +805,13 @@ impl App {
                     }
                 }
                 SplitLayout::Horizontal2 => {
+                    if tab_count >= 3 {
+                        Some(SplitLayout::Triple)
+                    } else {
+                        None
+                    }
+                }
+                SplitLayout::Triple => {
                     if tab_count >= 4 {
                         Some(SplitLayout::Quad)
                     } else {
@@ -803,6 +826,7 @@ impl App {
             Some(layout) => {
                 let pane_count = match layout {
                     SplitLayout::Vertical2 | SplitLayout::Horizontal2 => 2,
+                    SplitLayout::Triple => 3,
                     SplitLayout::Quad => 4,
                 };
                 let panes = self.pick_panes(pane_count);
@@ -1138,6 +1162,12 @@ impl App {
             }
             SplitLayout::Horizontal2 => {
                 if rel_y < half_h { 0 } else { 1 }
+            }
+            SplitLayout::Triple => {
+                // pane 0 = top full, pane 1 = bottom-left, pane 2 = bottom-right
+                if rel_y < half_h { 0 }
+                else if rel_x < half_w { 1 }
+                else { 2 }
             }
             SplitLayout::Quad => {
                 let col = if rel_x < half_w { 0 } else { 1 };
