@@ -84,6 +84,9 @@ pub struct App {
     // Clipboard message (temporary)
     pub clipboard_msg: Option<String>,
 
+    // Broadcast mode: input vai pra todas as tabs
+    pub broadcast: bool,
+
     // Mouse: áreas clicáveis (atualizadas a cada draw)
     pub mouse_sidebar_area: (u16, u16, u16, u16),   // x, y, w, h
     pub mouse_serverlist_area: (u16, u16, u16, u16),
@@ -130,6 +133,7 @@ impl App {
             mouse_serverlist_area: (0, 0, 0, 0),
             mouse_sidebar_offset_y: 0,
             mouse_tab_bar: None,
+            broadcast: false,
             split: None,
             #[cfg(feature = "api")]
             api_client: None,
@@ -574,6 +578,17 @@ impl App {
 
     pub fn active_session(&self) -> Option<&TerminalSession> {
         self.active_tab.and_then(|i| self.tabs.get(i))
+    }
+
+    /// Envia input pra todas as tabs (broadcast mode)
+    pub fn write_input_all(&mut self, bytes: &[u8]) {
+        for session in &mut self.tabs {
+            session.write_input(bytes.to_vec());
+        }
+    }
+
+    pub fn toggle_broadcast(&mut self) {
+        self.broadcast = !self.broadcast;
     }
 
     pub fn resize_active_terminal(&mut self, cols: u16, rows: u16) {

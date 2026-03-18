@@ -316,12 +316,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::F(4) => {
                                 if app.is_split() {
-                                    // Foco painel anterior (cicla)
                                     if let Some(ref mut s) = app.split {
                                         s.focused_pane = if s.focused_pane == 0 { s.panes.len() - 1 } else { s.focused_pane - 1 };
                                         app.active_tab = Some(s.panes[s.focused_pane]);
                                     }
                                 }
+                                continue;
+                            }
+                            KeyCode::F(5) => {
+                                app.toggle_broadcast();
                                 continue;
                             }
                             _ => {}
@@ -354,7 +357,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             key_to_bytes(key.code, ctrl, shift, alt);
 
                         if let Some(b) = bytes {
-                            if let Some(session) = app.active_session_mut() {
+                            if app.broadcast {
+                                app.write_input_all(&b);
+                            } else if let Some(session) = app.active_session_mut() {
                                 session.write_input(b);
                             }
                         }

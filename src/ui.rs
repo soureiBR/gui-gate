@@ -39,7 +39,7 @@ const DIMMED: Color = Color::Rgb(108, 112, 134);         // Overlay1
 const SURFACE: Color = Color::Rgb(49, 50, 68);           // Surface0
 const GREEN: Color = Color::Rgb(166, 227, 161);          // Green
 const YELLOW: Color = Color::Rgb(249, 226, 175);         // Yellow
-const RED: Color = Color::Rgb(243, 139, 168);            // Red
+const RED: Color = Color::Rgb(255, 69, 58);              // Red (intenso)
 const PEACH: Color = Color::Rgb(250, 179, 135);          // Peach
 const MAUVE: Color = Color::Rgb(203, 166, 247);          // Mauve
 const TEAL: Color = Color::Rgb(148, 226, 213);           // Teal
@@ -676,11 +676,17 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     // Extraímos os dados necessários da session primeiro
     let session_name = app.tabs[tab_idx].name.clone();
     let tab_count = app.tabs.len();
+    let title = if app.broadcast {
+        format!(" {} ● BROADCAST ", session_name)
+    } else {
+        format!(" {} ", session_name)
+    };
+    let border_color = if app.broadcast { RED } else { ACTIVE_BORDER };
     let block = Block::default()
-        .title(format!(" {} ", session_name))
+        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACTIVE_BORDER))
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(Color::Rgb(0, 0, 0)));
 
     let inner = if tab_count > 1 {
@@ -715,11 +721,12 @@ fn draw_split_terminal_by_ref(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let pane_areas = split_layout_rects(area, layout);
 
+    let broadcast = app.broadcast;
     for (pane_idx, &tab_idx) in panes.iter().enumerate() {
         if tab_idx < app.tabs.len() {
             let is_focused = pane_idx == focused;
             let session = &app.tabs[tab_idx];
-            draw_split_pane(frame, pane_areas[pane_idx], session, is_focused);
+            draw_split_pane(frame, pane_areas[pane_idx], session, is_focused, broadcast);
         }
     }
 
@@ -899,8 +906,9 @@ fn draw_split_pane(
     area: Rect,
     session: &TerminalSession,
     is_focused: bool,
+    broadcast: bool,
 ) {
-    let border_color = if is_focused { ACTIVE_BORDER } else { INACTIVE_BORDER };
+    let border_color = if broadcast { RED } else if is_focused { ACTIVE_BORDER } else { INACTIVE_BORDER };
 
     let block = Block::default()
         .title(format!(" {} ", session.name))
@@ -1083,7 +1091,15 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(" Proxima "),
                 key_hint("F2"),
                 Span::raw(" Split "),
+                key_hint("F5"),
+                Span::raw(" Broadcast "),
             ]);
+            if app.broadcast {
+                spans.push(Span::styled(
+                    " ● BROADCAST ",
+                    Style::default().fg(Color::Rgb(17, 17, 27)).bg(RED).add_modifier(Modifier::BOLD),
+                ));
+            }
             if app.is_split() {
                 spans.push(key_hint("F3/F4"));
                 spans.push(Span::raw(" Painel "));
