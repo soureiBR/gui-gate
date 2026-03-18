@@ -36,6 +36,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "Building version: $VERSION"
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
