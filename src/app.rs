@@ -49,6 +49,8 @@ pub enum AppMode {
     Detail,
     /// Command palette overlay
     Palette,
+    /// Help screen
+    Help,
 }
 
 pub struct PaletteItem {
@@ -123,6 +125,16 @@ pub struct App {
     pub palette_filtered: Vec<usize>,
     pub palette_index: usize,
 
+    // Multi-select servers
+    pub selected_servers: Vec<usize>,
+
+    // Auto-reconnect
+    pub reconnect_server: Option<(usize, Server)>,
+
+    // Help screen
+    pub help_scroll: usize,
+    pub prev_mode: AppMode,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -166,6 +178,10 @@ impl App {
             palette_items: Vec::new(),
             palette_filtered: Vec::new(),
             palette_index: 0,
+            selected_servers: Vec::new(),
+            reconnect_server: None,
+            help_scroll: 0,
+            prev_mode: AppMode::Browse,
             #[cfg(feature = "api")]
             api_client: None,
         };
@@ -348,7 +364,9 @@ impl App {
                 }
             }
             SidebarFocus::ServerList => {
-                if let Some(&real_index) = self.filtered_indices.get(self.server_index) {
+                if self.has_selection() {
+                    self.connect_selected();
+                } else if let Some(&real_index) = self.filtered_indices.get(self.server_index) {
                     let server = self.current_servers()[real_index].clone();
                     self.open_terminal(&server);
                 }
@@ -372,6 +390,9 @@ impl App {
             AppMode::Terminal => {}
             AppMode::Palette => {
                 self.close_palette();
+            }
+            AppMode::Help => {
+                self.close_help();
             }
         }
     }
@@ -439,6 +460,105 @@ impl App {
 
     pub fn clear_clipboard_msg(&mut self) {
         self.clipboard_msg = None;
+    }
+
+    // ─── Multi-select ────────────────────────────────────────────────
+
+    pub fn toggle_select(&mut self) {
+        if let Some(&_real_index) = self.filtered_indices.get(self.server_index) {
+            let idx = self.server_index;
+            if let Some(pos) = self.selected_servers.iter().position(|&i| i == idx) {
+                self.selected_servers.remove(pos);
+            } else {
+                self.selected_servers.push(idx);
+            }
+        }
+    }
+
+    pub fn connect_selected(&mut self) {
+        let indices: Vec<usize> = self.selected_servers.drain(..).collect();
+        let servers: Vec<Server> = indices
+            .iter()
+            .filter_map(|&i| {
+                self.filtered_indices
+                    .get(i)
+                    .and_then(|&real| self.current_servers().get(real).cloned())
+            })
+            .collect();
+        for server in &servers {
+            self.open_terminal(server);
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        !self.selected_servers.is_empty()
+    }
+
+    pub fn is_selected(&self, idx: usize) -> bool {
+        self.selected_servers.contains(&idx)
+    }
+
+    // ─── Auto-reconnect ────────────────────────────────────────────
+
+    /// Check if the active session is dead and store reconnect info
+    pub fn check_dead_sessions(&mut self) {
+        if self.reconnect_server.is_some() {
+            return;
+        }
+        if let Some(idx) = self.active_tab {
+            if let Some(session) = self.tabs.get(idx) {
+                if session.is_dead() {
+                    // Find the server info - search by name in recent connections
+                    let name = session.name.clone();
+                    let server = self.recent_connections.iter().find(|s| s.name == name).cloned()
+                        .unwrap_or_else(|| {
+                            // Fallback: create a minimal Server from what we know
+                            Server { name, ..Default::default() }
+                        });
+                    self.reconnect_server = Some((idx, server));
+                }
+            }
+        }
+    }
+
+    /// Reconnect: replace the dead tab with a new session for the same server
+    pub fn reconnect_active(&mut self) {
+        if let Some((tab_idx, server)) = self.reconnect_server.take() {
+            let key = self.config.settings.ssh_key.clone();
+            match TerminalSession::new(&server, &key, 220, 50) {
+                Ok(session) => {
+                    if tab_idx < self.tabs.len() {
+                        self.tabs[tab_idx] = session;
+                    } else {
+                        self.tabs.push(session);
+                        self.active_tab = Some(self.tabs.len() - 1);
+                    }
+                    self.mode = AppMode::Terminal;
+                }
+                Err(_e) => {
+                    // Failed to reconnect, dismiss instead
+                    self.dismiss_dead();
+                }
+            }
+        }
+    }
+
+    /// Dismiss the dead tab (close it)
+    pub fn dismiss_dead(&mut self) {
+        self.reconnect_server = None;
+        self.close_active_tab();
+    }
+
+    // ─── Help screen ───────────────────────────────────────────────
+
+    pub fn show_help(&mut self) {
+        self.prev_mode = self.mode;
+        self.help_scroll = 0;
+        self.mode = AppMode::Help;
+    }
+
+    pub fn close_help(&mut self) {
+        self.mode = self.prev_mode;
     }
 
     // ─── Search ─────────────────────────────────────────────────────

@@ -159,18 +159,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last_size = terminal.size()?;
     let mut last_click: Option<(u16, u16, std::time::Instant)> = None;
+    #[cfg(feature = "api")]
+    let mut last_refresh = std::time::Instant::now();
 
     loop {
-        // Detecta sessão morta e fecha automaticamente
-        let active_dead = app
-            .active_session()
-            .map(|s| s.is_dead())
-            .unwrap_or(false);
-        if active_dead {
-            app.close_active_tab();
-            terminal.clear()?;
+        // Auto-reconnect: detect dead session and store reconnect info
+        if app.mode == AppMode::Terminal {
+            app.check_dead_sessions();
         }
 
+        // Auto-refresh in background (every 5 minutes, only in Browse mode with API)
+        #[cfg(feature = "api")]
+        if app.is_api_mode() && app.mode != AppMode::Terminal && last_refresh.elapsed() > std::time::Duration::from_secs(300) {
+            let _ = app.refresh_from_api();
+            last_refresh = std::time::Instant::now();
+        }
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
         // Ajusta terminal embutido ao tamanho atual
@@ -279,6 +282,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                         let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+                        // If active session is dead, handle reconnect/dismiss
+                        let session_dead = app.active_session().map(|s| s.is_dead()).unwrap_or(false);
+                        if session_dead {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    app.reconnect_active();
+                                    terminal.clear()?;
+                                    continue;
+                                }
+                                KeyCode::Esc => {
+                                    app.dismiss_dead();
+                                    terminal.clear()?;
+                                    continue;
+                                }
+                                _ => { continue; }
+                            }
+                        }
+
+                        // F1 = Help
+                        if key.code == KeyCode::F(1) {
+                            app.show_help();
+                            continue;
+                        }
+
+                        // Shift+PageUp/Down for terminal scrollback
+                        if shift {
+                            match key.code {
+                                KeyCode::PageUp => {
+                                    if let Some(session) = app.active_session_mut() {
+                                        session.scroll_up(10);
+                                    }
+                                    continue;
+                                }
+                                KeyCode::PageDown => {
+                                    if let Some(session) = app.active_session_mut() {
+                                        session.scroll_down(10);
+                                    }
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
 
                         // F-keys pra split (não conflitam com SSH)
                         match key.code {
@@ -390,13 +436,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(b) = bytes {
                             if app.broadcast {
                                 app.write_input_all(&b);
+                                // Reset scroll on all tabs
+                                for session in &mut app.tabs {
+                                    session.scroll_reset();
+                                }
                             } else if let Some(session) = app.active_session_mut() {
                                 session.write_input(b);
+                                session.scroll_reset();
                             }
                         }
                     }
 
+                    AppMode::Help => match key.code {
+                        KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') => app.close_help(),
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.help_scroll = app.help_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.help_scroll = app.help_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.help_scroll = app.help_scroll.saturating_sub(10);
+                        }
+                        KeyCode::PageDown => {
+                            app.help_scroll = app.help_scroll.saturating_add(10);
+                        }
+                        _ => {}
+                    },
+
                     AppMode::Search => match key.code {
+                        KeyCode::F(1) => app.show_help(),
                         KeyCode::Esc => app.go_back_nav(),
                         KeyCode::Enter => {
                             if app.is_global_search && !app.global_results.is_empty() {
@@ -467,15 +536,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
                                 app.go_back_nav()
                             }
+                            KeyCode::Char(' ') => app.toggle_select(),
                             KeyCode::Char('/') => app.enter_search(),
                             KeyCode::Char('i') => app.show_detail(),
                             KeyCode::Char('c') => app.copy_ip(),
                             KeyCode::Tab => app.toggle_sidebar_focus(),
+                            KeyCode::F(1) => app.show_help(),
                             #[cfg(feature = "api")]
                             KeyCode::F(5) => {
                                 if let Err(e) = app.refresh_from_api() {
                                     eprintln!("Refresh falhou: {}", e);
                                 }
+                                last_refresh = std::time::Instant::now();
                             }
                             _ => {}
                         }

@@ -160,6 +160,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == AppMode::Palette {
         draw_palette(frame, area, app);
     }
+
+    // Help popup overlay
+    if app.mode == AppMode::Help {
+        draw_help_popup(frame, area, app);
+    }
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
@@ -499,13 +504,22 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
-            let style = row_style(i, app.server_index, is_focused);
+            let selected = app.is_selected(i);
+            let mut style = row_style(i, app.server_index, is_focused);
+            if selected {
+                style = style.bg(Color::Rgb(30, 50, 30));
+            }
             let status = status_indicator(&server.status);
             let svc = services_status(server);
+            let name_display = if selected {
+                format!("\u{2713} {}", server.name)
+            } else {
+                server.name.clone()
+            };
 
             Row::new(vec![
                 Cell::from(status.0).style(Style::default().fg(status.1)),
-                Cell::from(server.name.as_str()),
+                Cell::from(name_display).style(if selected { Style::default().fg(GREEN) } else { Style::default() }),
                 Cell::from(server.display_addr()),
                 Cell::from(if server.ip_public.is_empty() { "—" } else { &server.ip_public }),
                 Cell::from(svc),
@@ -542,12 +556,21 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
-            let style = row_style(i, app.server_index, is_focused);
+            let selected = app.is_selected(i);
+            let mut style = row_style(i, app.server_index, is_focused);
+            if selected {
+                style = style.bg(Color::Rgb(30, 50, 30));
+            }
             let status = status_indicator(&server.status);
+            let name_display = if selected {
+                format!("\u{2713} {}", server.name)
+            } else {
+                server.name.clone()
+            };
 
             Row::new(vec![
                 Cell::from(status.0).style(Style::default().fg(status.1)),
-                Cell::from(server.name.as_str()),
+                Cell::from(name_display).style(if selected { Style::default().fg(GREEN) } else { Style::default() }),
                 Cell::from(server.display_addr()),
                 Cell::from(server.user.as_str()),
             ]).style(style)
@@ -577,9 +600,19 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         .height(1);
 
         let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
-            let style = row_style(i, app.server_index, is_focused);
+            let selected = app.is_selected(i);
+            let mut style = row_style(i, app.server_index, is_focused);
+            if selected {
+                style = style.bg(Color::Rgb(30, 50, 30));
+            }
+            let name_display = if selected {
+                format!("\u{2713} {}", server.name)
+            } else {
+                server.name.clone()
+            };
+
             Row::new(vec![
-                Cell::from(server.name.as_str()),
+                Cell::from(name_display).style(if selected { Style::default().fg(GREEN) } else { Style::default() }),
                 Cell::from(server.display_addr()),
                 Cell::from(server.user.as_str()),
             ]).style(style)
@@ -711,7 +744,11 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     };
 
     let session = &app.tabs[tab_idx];
-    frame.render_widget(TermWidget { session }, inner);
+    if session.is_dead() {
+        draw_dead_session_overlay(frame, inner, &session.name);
+    } else {
+        frame.render_widget(TermWidget { session }, inner);
+    }
 }
 
 /// Wrapper pra split que evita borrow conflicts
@@ -854,10 +891,11 @@ impl Widget for TermWidget<'_> {
         }
 
         // Renderiza o cursor
+        let display_offset = grid.display_offset();
         let cursor = grid.cursor.point;
         let cx = area.x + cursor.column.0 as u16;
         let cy = area.y + cursor.line.0 as u16;
-        if cx < area.right() && cy < area.bottom() && cx < buf.area.right() && cy < buf.area.bottom() {
+        if display_offset == 0 && cx < area.right() && cy < area.bottom() && cx < buf.area.right() && cy < buf.area.bottom() {
             if let Some(bc) = buf.cell_mut((cx, cy)) {
                 bc.set_style(
                     Style::default()
@@ -865,6 +903,24 @@ impl Widget for TermWidget<'_> {
                         .bg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 );
+            }
+        }
+
+        // Scroll indicator
+        if display_offset > 0 {
+            let indicator = format!("[SCROLL +{}]", display_offset);
+            let indicator_len = indicator.len() as u16;
+            let start_x = area.right().saturating_sub(indicator_len + 1);
+            let y = area.y;
+            let style = Style::default().fg(YELLOW).bg(Color::Rgb(30, 30, 46)).add_modifier(Modifier::BOLD);
+            for (i, ch) in indicator.chars().enumerate() {
+                let x = start_x + i as u16;
+                if x < area.right() && y < area.bottom() && x < buf.area.right() && y < buf.area.bottom() {
+                    if let Some(bc) = buf.cell_mut((x, y)) {
+                        bc.set_char(ch);
+                        bc.set_style(style);
+                    }
+                }
             }
         }
     }
@@ -925,8 +981,50 @@ fn draw_split_pane(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let term_widget = TermWidget { session };
-    frame.render_widget(term_widget, inner);
+    if session.is_dead() {
+        draw_dead_session_overlay(frame, inner, &session.name);
+    } else {
+        let term_widget = TermWidget { session };
+        frame.render_widget(term_widget, inner);
+    }
+}
+
+/// Draws a "disconnected" overlay when a terminal session has died
+fn draw_dead_session_overlay(frame: &mut Frame, area: Rect, name: &str) {
+    // Fill with dark background
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(17, 17, 27))),
+        area,
+    );
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("     ", Style::default()),
+            Span::styled("●", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} (disconnected)", name), Style::default().fg(SUBTEXT)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("     Connection closed", Style::default().fg(SUBTEXT))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("     ", Style::default()),
+            Span::styled("Enter", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(" = Reconnect", Style::default().fg(SUBTEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("     ", Style::default()),
+            Span::styled("Esc", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled("   = Close tab", Style::default().fg(SUBTEXT)),
+        ]),
+    ];
+
+    // Center vertically
+    let text_h = lines.len() as u16;
+    let y_offset = area.height.saturating_sub(text_h) / 2;
+    let text_area = Rect::new(area.x, area.y + y_offset, area.width, text_h.min(area.height));
+
+    frame.render_widget(Paragraph::new(lines), text_area);
 }
 
 // ── Detail popup ──────────────────────────────────────────────────────────────
@@ -1143,6 +1241,101 @@ fn palette_list_item(item: &PaletteItem, is_selected: bool) -> ListItem<'static>
     ListItem::new(line).style(style)
 }
 
+// ── Help popup ────────────────────────────────────────────────────────────────
+
+fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
+    let popup_w = (area.width as f32 * 0.80).min(80.0) as u16;
+    let popup_h = (area.height as f32 * 0.80) as u16;
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+    // Clear background
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(24, 24, 37))),
+        popup_area,
+    );
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Keyboard Shortcuts ",
+            Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(MAUVE))
+        .style(Style::default().bg(Color::Rgb(24, 24, 37)));
+
+    let key_style = Style::default().fg(PEACH).add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(SUBTEXT);
+    let section_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+
+    let help_entry = |key: &str, desc: &str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("  {:<16}", key), key_style),
+            Span::styled(desc.to_string(), desc_style),
+        ])
+    };
+
+    let section = |title: &str| -> Line<'static> {
+        Line::from(Span::styled(
+            format!("  -- {} {}", title, "-".repeat(40usize.saturating_sub(title.len() + 5))),
+            section_style,
+        ))
+    };
+
+    let all_lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        section("Navigation"),
+        help_entry("Up/Down / j/k", "Navigate lists"),
+        help_entry("Enter / l", "Select / Connect"),
+        help_entry("Esc / h", "Go back"),
+        help_entry("Tab", "Switch panel focus"),
+        help_entry("/", "Global search"),
+        help_entry("g / G", "Jump to top / bottom"),
+        Line::from(""),
+        section("Server Actions"),
+        help_entry("i", "Server details"),
+        help_entry("c", "Copy IP to clipboard"),
+        help_entry("Space", "Select/deselect server"),
+        help_entry("Ctrl+P", "Command palette"),
+        Line::from(""),
+        section("Terminal"),
+        help_entry("Ctrl+B", "Back to sidebar"),
+        help_entry("Ctrl+W", "Close tab"),
+        help_entry("Ctrl+Tab", "Next tab"),
+        help_entry("F2", "Toggle split (V/H/Quad)"),
+        help_entry("F3 / F4", "Next/prev split pane"),
+        help_entry("F5", "Toggle broadcast"),
+        help_entry("F6", "Run: htop"),
+        help_entry("F7", "Run: docker ps"),
+        help_entry("F8", "Run: journalctl -f"),
+        help_entry("Shift+PgUp/PgDn", "Scroll terminal history"),
+        Line::from(""),
+        section("General"),
+        help_entry("F1", "This help"),
+        help_entry("Ctrl+L", "Logout (API mode)"),
+        help_entry("F5", "Refresh (Browse, API)"),
+        help_entry("q", "Quit"),
+        Line::from(""),
+    ];
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let visible_h = inner.height as usize;
+    let max_scroll = all_lines.len().saturating_sub(visible_h);
+    let scroll = app.help_scroll.min(max_scroll);
+
+    let visible_lines: Vec<Line<'static>> = all_lines
+        .into_iter()
+        .skip(scroll)
+        .take(visible_h)
+        .collect();
+
+    frame.render_widget(Paragraph::new(visible_lines), inner);
+}
+
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
@@ -1269,25 +1462,54 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             key_hint("↑↓"),
             Span::raw(" navegar "),
         ]),
+        AppMode::Help => Line::from(vec![
+            Span::styled(
+                " HELP ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(MAUVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            key_hint("Esc/F1/q"),
+            Span::raw(" Fechar "),
+            key_hint("↑↓"),
+            Span::raw(" Scroll "),
+        ]),
         AppMode::Browse => {
-            let mut hints = vec![
-                key_hint("q"),
-                Span::raw(" Sair "),
-                key_hint("/"),
-                Span::raw(" Buscar "),
-                key_hint("Enter"),
-                Span::raw(" Conectar "),
-                key_hint("i"),
-                Span::raw(" Info "),
-                key_hint("c"),
-                Span::raw(" Copiar "),
+            let mut hints = vec![];
+            if app.has_selection() {
+                hints.push(Span::styled(
+                    format!(" {} selected ", app.selected_servers.len()),
+                    Style::default().fg(Color::Rgb(17, 17, 27)).bg(GREEN).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::raw(" "));
+                hints.push(key_hint("Enter"));
+                hints.push(Span::raw(" Conectar selecionados "));
+                hints.push(key_hint("Space"));
+                hints.push(Span::raw(" Selecionar "));
+            } else {
+                hints.extend([
+                    key_hint("q"),
+                    Span::raw(" Sair "),
+                    key_hint("/"),
+                    Span::raw(" Buscar "),
+                    key_hint("Enter"),
+                    Span::raw(" Conectar "),
+                    key_hint("Space"),
+                    Span::raw(" Selecionar "),
+                    key_hint("i"),
+                    Span::raw(" Info "),
+                    key_hint("c"),
+                    Span::raw(" Copiar "),
+                ]);
+            }
+            hints.extend([
                 key_hint("Ctrl+P"),
                 Span::raw(" Palette "),
-                key_hint("Tab"),
-                Span::raw(" Painel "),
-                key_hint("↑↓"),
-                Span::raw(" Navegar "),
-            ];
+                key_hint("F1"),
+                Span::raw(" Help "),
+            ]);
             if app.is_api_mode() {
                 hints.push(key_hint("Ctrl+L"));
                 hints.push(Span::raw(" Logout "));

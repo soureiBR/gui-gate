@@ -130,4 +130,22 @@ impl TerminalSession {
     pub fn is_dead(&self) -> bool {
         self.is_dead.load(Ordering::Relaxed)
     }
+
+    pub fn scroll_up(&mut self, lines: usize) {
+        use alacritty_terminal::grid::Scroll;
+        let mut term = self.term.lock();
+        term.scroll_display(Scroll::Delta(lines as i32));
+    }
+
+    pub fn scroll_down(&mut self, lines: usize) {
+        use alacritty_terminal::grid::Scroll;
+        let mut term = self.term.lock();
+        term.scroll_display(Scroll::Delta(-(lines as i32)));
+    }
+
+    pub fn scroll_reset(&mut self) {
+        use alacritty_terminal::grid::Scroll;
+        let mut term = self.term.lock();
+        term.scroll_display(Scroll::Bottom);
+    }
 }
