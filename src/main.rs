@@ -12,13 +12,13 @@ use std::borrow::Cow;
 use std::io;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers, MouseEventKind, MouseButton},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use app::{App, AppMode};
+use app::{App, AppMode, SplitLayout};
 use config::Config;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
         disable_raw_mode().ok();
-        execute!(io::stderr(), LeaveAlternateScreen).ok();
+        execute!(io::stderr(), crossterm::event::DisableMouseCapture, LeaveAlternateScreen).ok();
         original_hook(panic);
     }));
 
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── TUI ───────────────────────────────────────────────────────────────
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -158,6 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut last_size = terminal.size()?;
+    let mut last_click: Option<(u16, u16, std::time::Instant)> = None;
 
     loop {
         // Detecta sessão morta e fecha automaticamente
@@ -170,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             terminal.clear()?;
         }
 
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         // Ajusta terminal embutido ao tamanho atual
         let size = terminal.size()?;
@@ -180,17 +181,151 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let sidebar_w = ((size.width as f32 * 0.22).max(20.0).min(30.0) as u16) + 2;
                 let term_cols = size.width.saturating_sub(sidebar_w + 2);
                 let term_rows = size.height.saturating_sub(4);
-                app.resize_active_terminal(term_cols, term_rows);
+
+                if let Some(ref split) = app.split {
+                    let (pane_w, pane_h) = match split.layout {
+                        SplitLayout::Vertical2 => (term_cols / 2 - 1, term_rows - 2),
+                        SplitLayout::Horizontal2 => (term_cols - 2, term_rows / 2 - 1),
+                        SplitLayout::Quad => (term_cols / 2 - 1, term_rows / 2 - 1),
+                    };
+                    let pane_indices: Vec<usize> = split.panes.clone();
+                    for &tab_idx in &pane_indices {
+                        if let Some(session) = app.tabs.get_mut(tab_idx) {
+                            session.resize(pane_w, pane_h);
+                        }
+                    }
+                } else {
+                    app.resize_active_terminal(term_cols, term_rows);
+                }
             }
         }
 
         if event::poll(std::time::Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
+            let ev = event::read()?;
+
+            // ── Mouse events ──────────────────────────────────────────
+            if let Event::Mouse(mouse) = ev {
+                let (mx, my) = (mouse.column, mouse.row);
+                let (sx, sy, sw, sh) = app.mouse_sidebar_area;
+                let (lx, ly, lw, lh) = app.mouse_serverlist_area;
+
+                let in_sidebar = mx >= sx && mx < sx + sw && my >= sy && my < sy + sh;
+                let in_serverlist = mx >= lx && mx < lx + lw && my >= ly && my < ly + lh;
+
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Detecta duplo clique (< 400ms, mesma posição)
+                        let is_dblclick = last_click
+                            .map(|(lx, ly, t)| {
+                                lx == mx && ly == my
+                                    && t.elapsed() < std::time::Duration::from_millis(400)
+                            })
+                            .unwrap_or(false);
+
+                        if is_dblclick {
+                            last_click = None;
+                            // Duplo clique: abre/entra
+                            if in_sidebar {
+                                app.mouse_click_sidebar(my);
+                                app.enter_nav();
+                                if app.mode == AppMode::Terminal {
+                                    terminal.clear()?;
+                                }
+                            } else if in_serverlist && app.mode == AppMode::Browse {
+                                app.mouse_click_serverlist(my);
+                                app.enter_nav();
+                                if app.mode == AppMode::Terminal {
+                                    terminal.clear()?;
+                                }
+                            }
+                        } else {
+                            last_click = Some((mx, my, std::time::Instant::now()));
+                            // Clique simples
+                            if in_sidebar {
+                                app.mouse_click_sidebar(my);
+                            } else if in_serverlist && app.mode == AppMode::Browse {
+                                app.mouse_click_serverlist(my);
+                            } else if app.mode == AppMode::Terminal {
+                                // Clique na tab bar
+                                let in_tab_bar = app.mouse_tab_bar
+                                    .as_ref()
+                                    .map(|(ty, _, _)| my == *ty)
+                                    .unwrap_or(false);
+
+                                if in_tab_bar {
+                                    app.mouse_click_tab(mx);
+                                } else if app.is_split() {
+                                    app.mouse_click_split_pane(mx, my);
+                                }
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if in_sidebar { app.mouse_scroll_sidebar(true); }
+                        else if in_serverlist { app.mouse_scroll_serverlist(true); }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if in_sidebar { app.mouse_scroll_sidebar(false); }
+                        else if in_serverlist { app.mouse_scroll_serverlist(false); }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            if let Event::Key(key) = ev {
                 match app.mode {
                     AppMode::Terminal => {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                         let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+                        // F-keys pra split (não conflitam com SSH)
+                        match key.code {
+                            KeyCode::F(2) => {
+                                app.toggle_split();
+                                if let Some(ref split) = app.split {
+                                    let sz = terminal.size()?;
+                                    let sidebar_w = ((sz.width as f32 * 0.22).max(20.0).min(30.0) as u16) + 2;
+                                    let term_cols = sz.width.saturating_sub(sidebar_w + 2);
+                                    let term_rows = sz.height.saturating_sub(4);
+                                    let (pane_w, pane_h) = match split.layout {
+                                        SplitLayout::Vertical2 => (term_cols / 2 - 1, term_rows - 2),
+                                        SplitLayout::Horizontal2 => (term_cols - 2, term_rows / 2 - 1),
+                                        SplitLayout::Quad => (term_cols / 2 - 1, term_rows / 2 - 1),
+                                    };
+                                    let pane_indices: Vec<usize> = split.panes.clone();
+                                    for &tab_idx in &pane_indices {
+                                        if let Some(session) = app.tabs.get_mut(tab_idx) {
+                                            session.resize(pane_w, pane_h);
+                                        }
+                                    }
+                                }
+                                terminal.clear()?;
+                                continue;
+                            }
+                            KeyCode::F(3) => {
+                                if app.is_split() {
+                                    // Foco próximo painel (cicla)
+                                    if let Some(ref mut s) = app.split {
+                                        s.focused_pane = (s.focused_pane + 1) % s.panes.len();
+                                        app.active_tab = Some(s.panes[s.focused_pane]);
+                                    }
+                                }
+                                continue;
+                            }
+                            KeyCode::F(4) => {
+                                if app.is_split() {
+                                    // Foco painel anterior (cicla)
+                                    if let Some(ref mut s) = app.split {
+                                        s.focused_pane = if s.focused_pane == 0 { s.panes.len() - 1 } else { s.focused_pane - 1 };
+                                        app.active_tab = Some(s.panes[s.focused_pane]);
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
 
                         if ctrl {
                             match key.code {
@@ -200,6 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 KeyCode::Char('w') => {
                                     app.close_active_tab();
+                                    terminal.clear()?;
                                     continue;
                                 }
                                 KeyCode::Tab => {
@@ -302,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), crossterm::event::DisableMouseCapture, LeaveAlternateScreen)?;
     Ok(())
 }
 

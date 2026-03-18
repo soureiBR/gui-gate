@@ -13,7 +13,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line as TermLine};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 
-use crate::app::{App, AppMode, SidebarFocus, SidebarItem};
+use crate::app::{App, AppMode, SidebarFocus, SidebarItem, SplitLayout};
 use crate::terminal::TerminalSession;
 
 // ── Paleta ────────────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ fn ansi_to_ratatui(color: AnsiColor, is_fg: bool) -> Color {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Pinta TODO o frame com a cor base do tema
@@ -191,7 +191,7 @@ fn draw_titlebar(frame: &mut Frame, area: Rect, app: &App) {
 
 // ── Body ──────────────────────────────────────────────────────────────────────
 
-fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
     let sidebar_w = (area.width as f32 * 0.22).max(20.0).min(30.0) as u16;
 
     let chunks = Layout::default()
@@ -199,12 +199,28 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Length(sidebar_w), Constraint::Min(30)])
         .split(area);
 
+    // Salva áreas pra detecção de clique do mouse
+    let sb = chunks[0];
+    app.mouse_sidebar_area = (sb.x, sb.y, sb.width, sb.height);
+    app.mouse_sidebar_offset_y = sb.y + 1; // +1 pela borda do block
+    let sl = chunks[1];
+    app.mouse_serverlist_area = (sl.x, sl.y, sl.width, sl.height);
+
     draw_sidebar(frame, chunks[0], app);
 
     match app.mode {
         AppMode::Terminal => {
-            if let Some(session) = app.active_session() {
-                draw_terminal_panel(frame, chunks[1], app, session);
+            let has_split = app.split.is_some();
+            let active_idx = app.active_tab;
+
+            if has_split {
+                draw_split_terminal_by_ref(frame, chunks[1], app);
+            } else if let Some(idx) = active_idx {
+                if idx < app.tabs.len() {
+                    draw_terminal_panel_by_idx(frame, chunks[1], app, idx);
+                } else {
+                    draw_server_list(frame, chunks[1], app);
+                }
             } else {
                 draw_server_list(frame, chunks[1], app);
             }
@@ -654,21 +670,20 @@ fn draw_global_search(frame: &mut Frame, area: Rect, app: &App) {
 
 // ── Terminal panel ────────────────────────────────────────────────────────────
 
-fn draw_terminal_panel(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    session: &TerminalSession,
-) {
+/// Wrapper que acessa tab por índice (evita borrow conflicts)
+fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_idx: usize) {
+    // Safety: precisamos de referências separadas pra tabs[idx] e app
+    // Extraímos os dados necessários da session primeiro
+    let session_name = app.tabs[tab_idx].name.clone();
+    let tab_count = app.tabs.len();
     let block = Block::default()
-        .title(format!(" {} ", session.name))
+        .title(format!(" {} ", session_name))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACTIVE_BORDER))
         .style(Style::default().bg(Color::Rgb(0, 0, 0)));
 
-    // Tab bar (se tiver mais de 1 sessão)
-    let inner = if app.tabs.len() > 1 {
+    let inner = if tab_count > 1 {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(1)])
@@ -678,23 +693,53 @@ fn draw_terminal_panel(
         draw_tab_bar(frame, chunks[0], app);
         chunks[1]
     } else {
+        app.mouse_tab_bar = None;
         let inner = block.inner(area);
         frame.render_widget(block, area);
         inner
     };
 
-    // Renderiza o grid do terminal
-    let term_widget = TermWidget { session };
-    frame.render_widget(term_widget, inner);
+    let session = &app.tabs[tab_idx];
+    frame.render_widget(TermWidget { session }, inner);
 }
 
-fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
+/// Wrapper pra split que evita borrow conflicts
+fn draw_split_terminal_by_ref(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Copia os dados do split pra evitar borrow
+    let layout = match app.split {
+        Some(ref s) => s.layout,
+        None => return,
+    };
+    let panes: Vec<usize> = app.split.as_ref().unwrap().panes.clone();
+    let focused = app.split.as_ref().unwrap().focused_pane;
+
+    let pane_areas = split_layout_rects(area, layout);
+
+    for (pane_idx, &tab_idx) in panes.iter().enumerate() {
+        if tab_idx < app.tabs.len() {
+            let is_focused = pane_idx == focused;
+            let session = &app.tabs[tab_idx];
+            draw_split_pane(frame, pane_areas[pane_idx], session, is_focused);
+        }
+    }
+
+    app.mouse_tab_bar = None;
+}
+
+fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut spans = vec![];
+    let mut tab_ranges: Vec<(u16, u16)> = vec![];
+    let mut x_pos = area.x;
+
     for (i, tab) in app.tabs.iter().enumerate() {
         let is_active = app.active_tab == Some(i);
+        let label = format!(" {} ", tab.name);
+        let label_len = label.len() as u16;
+        let tab_start = x_pos;
+
         if is_active {
             spans.push(Span::styled(
-                format!(" {} ", tab.name),
+                label,
                 Style::default()
                     .fg(TAB_ACTIVE_FG)
                     .bg(TAB_ACTIVE_BG)
@@ -702,12 +747,18 @@ fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
             ));
         } else {
             spans.push(Span::styled(
-                format!(" {} ", tab.name),
+                label,
                 Style::default().fg(TAB_FG).bg(TAB_BG),
             ));
         }
+        x_pos += label_len;
         spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+        x_pos += 1;
+
+        tab_ranges.push((tab_start, tab_start + label_len));
     }
+
+    app.mouse_tab_bar = Some((area.y, area.x, tab_ranges));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -805,6 +856,64 @@ impl Widget for TermWidget<'_> {
             }
         }
     }
+}
+
+// ── Split terminal ────────────────────────────────────────────────────────────
+
+fn split_layout_rects(area: Rect, layout: SplitLayout) -> Vec<Rect> {
+    match layout {
+        SplitLayout::Vertical2 => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            vec![chunks[0], chunks[1]]
+        }
+        SplitLayout::Horizontal2 => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            vec![chunks[0], chunks[1]]
+        }
+        SplitLayout::Quad => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            let top = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[0]);
+            let bot = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[1]);
+            vec![top[0], top[1], bot[0], bot[1]]
+        }
+    }
+}
+
+fn draw_split_pane(
+    frame: &mut Frame,
+    area: Rect,
+    session: &TerminalSession,
+    is_focused: bool,
+) {
+    let border_color = if is_focused { ACTIVE_BORDER } else { INACTIVE_BORDER };
+
+    let block = Block::default()
+        .title(format!(" {} ", session.name))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().bg(Color::Rgb(17, 17, 27)));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let term_widget = TermWidget { session };
+    frame.render_widget(term_widget, inner);
 }
 
 // ── Detail popup ──────────────────────────────────────────────────────────────
@@ -940,7 +1049,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 .active_tab
                 .map(|i| format!("Tab {}/{}", i + 1, app.tabs.len()))
                 .unwrap_or_default();
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     " TERMINAL ",
                     Style::default()
@@ -949,13 +1058,37 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(" {} ", tab_info)),
+            ];
+            if let Some(ref split) = app.split {
+                let layout_name = match split.layout {
+                    SplitLayout::Vertical2 => "V-Split",
+                    SplitLayout::Horizontal2 => "H-Split",
+                    SplitLayout::Quad => "Quad",
+                };
+                spans.push(Span::styled(
+                    format!(" {} ", layout_name),
+                    Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    format!("Pane {}/{} ", split.focused_pane + 1, split.panes.len()),
+                    Style::default().fg(SUBTEXT),
+                ));
+            }
+            spans.extend([
                 key_hint("Ctrl+B"),
                 Span::raw(" Sidebar "),
                 key_hint("Ctrl+W"),
                 Span::raw(" Fechar "),
                 key_hint("Ctrl+Tab"),
-                Span::raw(" Próxima "),
-            ])
+                Span::raw(" Proxima "),
+                key_hint("F2"),
+                Span::raw(" Split "),
+            ]);
+            if app.is_split() {
+                spans.push(key_hint("F3/F4"));
+                spans.push(Span::raw(" Painel "));
+            }
+            Line::from(spans)
         }
         AppMode::Detail => Line::from(vec![
             Span::styled(
