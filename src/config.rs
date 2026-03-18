@@ -34,7 +34,8 @@ pub struct Category {
     pub servers: Vec<Server>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Default)]
+#[allow(dead_code)]
 pub struct Server {
     pub name: String,
     pub host: String,
@@ -42,6 +43,19 @@ pub struct Server {
     pub port: u16,
     #[serde(default = "default_user")]
     pub user: String,
+    // Campos extras da API (opcionais)
+    #[serde(default)]
+    pub ip_public: String,
+    #[serde(default)]
+    pub hostname: String,
+    #[serde(default)]
+    pub host_type: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub subnet: String,
+    #[serde(default)]
+    pub host_name: String, // VM: em qual host roda
 }
 
 fn default_port() -> u16 {

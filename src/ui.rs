@@ -29,6 +29,31 @@ const TAB_ACTIVE_FG: Color = Color::Cyan;
 const TAB_BG: Color = Color::Rgb(20, 20, 30);
 const TAB_FG: Color = Color::DarkGray;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn row_style(index: usize, selected: usize, is_focused: bool) -> Style {
+    if index == selected && is_focused {
+        Style::default()
+            .fg(HIGHLIGHT_FG)
+            .bg(HIGHLIGHT_BG)
+            .add_modifier(Modifier::BOLD)
+    } else if index == selected {
+        Style::default().fg(Color::White).bg(Color::Rgb(50, 50, 50))
+    } else {
+        Style::default().fg(Color::Gray)
+    }
+}
+
+fn status_indicator(status: &str) -> (&'static str, Color) {
+    match status.to_lowercase().as_str() {
+        "deployed" | "online" | "running" | "active" => ("●", Color::Green),
+        "pending" | "deploying" | "provisioning" => ("◐", Color::Yellow),
+        "error" | "failed" | "offline" | "stopped" => ("●", Color::Red),
+        "" => (" ", Color::DarkGray),
+        _ => ("○", Color::DarkGray),
+    }
+}
+
 // ── Terminal default colors (16 ANSI colors) ──────────────────────────────────
 
 /// Preto puro (ANSI Black = cinza na maioria dos temas, então usamos RGB)
@@ -297,54 +322,124 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let header = Row::new(vec![
-        Cell::from("Name").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("Address").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
-    ])
-    .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
-    .height(1);
+    // Decide colunas baseado na largura disponível e tipo de servidor
+    let inner_w = area.width.saturating_sub(4);
+    let has_extra_info = filtered.iter().any(|s| !s.status.is_empty() || !s.ip_public.is_empty());
+    let is_wide = inner_w > 80;
 
-    let rows: Vec<Row> = filtered
-        .iter()
-        .enumerate()
-        .map(|(i, server)| {
-            let is_focused =
-                app.mode == AppMode::Browse && app.sidebar_focus == SidebarFocus::ServerList;
-            let style = if i == app.server_index && is_focused {
-                Style::default()
-                    .fg(HIGHLIGHT_FG)
-                    .bg(HIGHLIGHT_BG)
-                    .add_modifier(Modifier::BOLD)
-            } else if i == app.server_index {
-                Style::default().fg(Color::White).bg(Color::Rgb(50, 50, 50))
-            } else {
-                Style::default().fg(Color::Gray)
-            };
+    let is_focused = app.mode == AppMode::Browse && app.sidebar_focus == SidebarFocus::ServerList;
 
+    if is_wide && has_extra_info {
+        // ── Layout largo: Status | Nome | Mesh IP | IP Público | Subnet | User ──
+        let header = Row::new(vec![
+            Cell::from(""),
+            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Mesh IP").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("IP Público").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Subnet").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
+        ])
+        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .height(1);
+
+        let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
+            let style = row_style(i, app.server_index, is_focused);
+            let status = status_indicator(&server.status);
+
+            Row::new(vec![
+                Cell::from(status.0).style(Style::default().fg(status.1)),
+                Cell::from(server.name.as_str()),
+                Cell::from(server.display_addr()),
+                Cell::from(if server.ip_public.is_empty() { "—" } else { &server.ip_public }),
+                Cell::from(if server.subnet.is_empty() { "—" } else { &server.subnet }),
+                Cell::from(server.user.as_str()),
+            ]).style(style)
+        }).collect();
+
+        let status_w = 2u16;
+        let user_w = 8u16;
+        let pub_w = 16u16;
+        let sub_w = 18u16;
+        let addr_w = 22u16;
+        let name_w = inner_w.saturating_sub(status_w + addr_w + pub_w + sub_w + user_w);
+
+        let table = Table::new(rows, [
+            Constraint::Length(status_w),
+            Constraint::Length(name_w),
+            Constraint::Length(addr_w),
+            Constraint::Length(pub_w),
+            Constraint::Length(sub_w),
+            Constraint::Length(user_w),
+        ]).header(header).block(block);
+
+        frame.render_widget(table, area);
+    } else if has_extra_info {
+        // ── Layout médio: Status | Nome | Endereço | User ──
+        let header = Row::new(vec![
+            Cell::from(""),
+            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
+        ])
+        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .height(1);
+
+        let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
+            let style = row_style(i, app.server_index, is_focused);
+            let status = status_indicator(&server.status);
+
+            Row::new(vec![
+                Cell::from(status.0).style(Style::default().fg(status.1)),
+                Cell::from(server.name.as_str()),
+                Cell::from(server.display_addr()),
+                Cell::from(server.user.as_str()),
+            ]).style(style)
+        }).collect();
+
+        let status_w = 2u16;
+        let user_w = 8u16;
+        let addr_w = 22u16;
+        let name_w = inner_w.saturating_sub(status_w + addr_w + user_w);
+
+        let table = Table::new(rows, [
+            Constraint::Length(status_w),
+            Constraint::Length(name_w),
+            Constraint::Length(addr_w),
+            Constraint::Length(user_w),
+        ]).header(header).block(block);
+
+        frame.render_widget(table, area);
+    } else {
+        // ── Layout simples (modo TOML): Nome | Endereço | User ──
+        let header = Row::new(vec![
+            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
+        ])
+        .style(Style::default().fg(Color::Cyan).bg(HEADER_BG))
+        .height(1);
+
+        let rows: Vec<Row> = filtered.iter().enumerate().map(|(i, server)| {
+            let style = row_style(i, app.server_index, is_focused);
             Row::new(vec![
                 Cell::from(server.name.as_str()),
                 Cell::from(server.display_addr()),
                 Cell::from(server.user.as_str()),
-            ])
-            .style(style)
-        })
-        .collect();
+            ]).style(style)
+        }).collect();
 
-    let inner_w = area.width.saturating_sub(4);
-    let addr_w = 22u16;
-    let user_w = 10u16;
-    let name_w = inner_w.saturating_sub(addr_w + user_w);
+        let addr_w = 22u16;
+        let user_w = 10u16;
+        let name_w = inner_w.saturating_sub(addr_w + user_w);
 
-    let table = Table::new(rows, [
-        Constraint::Length(name_w),
-        Constraint::Length(addr_w),
-        Constraint::Length(user_w),
-    ])
-    .header(header)
-    .block(block);
+        let table = Table::new(rows, [
+            Constraint::Length(name_w),
+            Constraint::Length(addr_w),
+            Constraint::Length(user_w),
+        ]).header(header).block(block);
 
-    frame.render_widget(table, area);
+        frame.render_widget(table, area);
+    }
 }
 
 // ── Global search results ─────────────────────────────────────────────────────

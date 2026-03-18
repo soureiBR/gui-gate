@@ -91,10 +91,16 @@ struct ApiHost {
     host_type: String,
     #[serde(default, deserialize_with = "de_to_string")]
     ip_mesh: String,
+    #[serde(default, deserialize_with = "de_to_string")]
+    ip_public: String,
     #[serde(default)]
     port_ssh: Option<u16>,
     #[serde(default, deserialize_with = "de_to_string")]
     ssh_user: String,
+    #[serde(default, deserialize_with = "de_to_string")]
+    status: String,
+    #[serde(default, deserialize_with = "de_to_string")]
+    subnet: String,
     #[serde(flatten)]
     _extra: serde_json::Value,
 }
@@ -425,6 +431,12 @@ fn categorize_hosts(hosts: &[ApiHost], categories: &mut Vec<Category>) {
             host: host.ip_mesh.clone(),
             port: host.port_ssh.unwrap_or(22),
             user: if host.ssh_user.is_empty() { "root".into() } else { host.ssh_user.clone() },
+            ip_public: host.ip_public.clone(),
+            hostname: host.hostname.clone(),
+            host_type: host.host_type.clone(),
+            status: host.status.clone(),
+            subnet: host.subnet.clone(),
+            host_name: String::new(),
         };
 
         // Categoriza pelo host_type (API retorna: pve, bm, pbs, monitor)
@@ -490,6 +502,12 @@ fn categorize_vms(vms: &[ApiVm], categories: &mut Vec<Category>) {
             host: vm.ip.clone(),
             port: vm.port_ssh.unwrap_or(22),
             user: if vm.ssh_user.is_empty() { "root".into() } else { vm.ssh_user.clone() },
+            ip_public: String::new(),
+            hostname: vm.name.clone(),
+            host_type: "vm".into(),
+            status: String::new(),
+            subnet: String::new(),
+            host_name: vm.host_name.clone(),
         };
 
         let group = if vm.host_name.is_empty() {
