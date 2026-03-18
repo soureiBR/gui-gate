@@ -35,6 +35,7 @@ const ACCENT: Color = Color::Rgb(137, 180, 250);         // Lavender
 const TEXT: Color = Color::Rgb(205, 214, 244);            // Text
 const SUBTEXT: Color = Color::Rgb(166, 173, 200);        // Subtext0
 const DIMMED: Color = Color::Rgb(108, 112, 134);         // Overlay1
+#[allow(dead_code)]
 const SURFACE: Color = Color::Rgb(49, 50, 68);           // Surface0
 const GREEN: Color = Color::Rgb(166, 227, 161);          // Green
 const YELLOW: Color = Color::Rgb(249, 226, 175);         // Yellow
@@ -147,6 +148,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_titlebar(frame, outer[0], app);
     draw_body(frame, outer[1], app);
     draw_statusbar(frame, outer[2], app);
+
+    // Detail popup overlay
+    if app.mode == AppMode::Detail {
+        if let Some(ref server) = app.detail_server {
+            draw_detail_popup(frame, area, server);
+        }
+    }
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
@@ -211,7 +219,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if app.mode == AppMode::Browse
+    let border_color = if (app.mode == AppMode::Browse || app.mode == AppMode::Detail)
         && app.sidebar_focus == SidebarFocus::Sidebar
     {
         ACTIVE_BORDER
@@ -252,16 +260,38 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(i, item)| {
             let is_selected = i == app.sidebar_index
-                && app.mode == AppMode::Browse
+                && (app.mode == AppMode::Browse || app.mode == AppMode::Detail)
                 && app.sidebar_focus == SidebarFocus::Sidebar;
 
             match item {
+                SidebarItem::RecentHeader => {
+                    let line = Line::from(vec![
+                        Span::styled("  Recents", Style::default().fg(PEACH).add_modifier(Modifier::BOLD)),
+                    ]);
+                    ListItem::new(line).style(Style::default().fg(PEACH))
+                }
+                SidebarItem::Recent(idx) => {
+                    let name = app.recent_connections.get(*idx)
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("?");
+                    let style = if is_selected {
+                        Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(DIMMED)
+                    };
+                    let marker = if is_selected { "  ▸ " } else { "    " };
+                    let line = Line::from(vec![
+                        Span::raw(marker),
+                        Span::styled(name, style),
+                    ]);
+                    ListItem::new(line).style(style)
+                }
                 SidebarItem::Category(ci) => {
                     let cat = &app.config.categories[*ci];
                     // Detecta host_type do primeiro servidor da categoria
                     let ht = cat.servers.first().map(|s| s.host_type.as_str()).unwrap_or("");
                     let icon_color = type_color(ht);
-                    let count = cat.servers.len();
+                    let total = cat.servers.len();
 
                     let style = if is_selected {
                         Style::default().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
@@ -270,13 +300,34 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
                     };
 
                     let marker = if is_selected { "▸ " } else { "  " };
-                    let line = Line::from(vec![
+
+                    // Online count: only show online/total when at least one server has status
+                    let has_status = cat.servers.iter().any(|s| !s.status.is_empty());
+                    let count_spans = if has_status {
+                        let online = cat.servers.iter().filter(|s| s.status.to_lowercase() == "online").count();
+                        let count_color = if online == total {
+                            GREEN
+                        } else if online == 0 {
+                            RED
+                        } else {
+                            YELLOW
+                        };
+                        vec![
+                            Span::styled(format!(" {}", online), Style::default().fg(count_color)),
+                            Span::styled(format!("/{}", total), Style::default().fg(DIMMED)),
+                        ]
+                    } else {
+                        vec![Span::styled(format!(" {}", total), Style::default().fg(DIMMED))]
+                    };
+
+                    let mut spans = vec![
                         Span::raw(marker),
                         Span::styled(type_icon(ht), Style::default().fg(icon_color)),
                         Span::raw(" "),
                         Span::styled(cat.name.as_str(), style),
-                        Span::styled(format!(" {}", count), Style::default().fg(DIMMED)),
-                    ]);
+                    ];
+                    spans.extend(count_spans);
+                    let line = Line::from(spans);
                     ListItem::new(line).style(style)
                 }
                 SidebarItem::GroupHeader { prefix, expanded, count } => {
@@ -756,6 +807,116 @@ impl Widget for TermWidget<'_> {
     }
 }
 
+// ── Detail popup ──────────────────────────────────────────────────────────────
+
+fn draw_detail_popup(frame: &mut Frame, area: Rect, server: &crate::config::Server) {
+    // Centered 60% x 60% popup
+    let popup_w = (area.width as f32 * 0.6) as u16;
+    let popup_h = (area.height as f32 * 0.6) as u16;
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+    // Clear background
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(24, 24, 37))),
+        popup_area,
+    );
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Server Details ",
+            Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(MAUVE))
+        .style(Style::default().bg(Color::Rgb(24, 24, 37)));
+
+    let label_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let value_style = Style::default().fg(TEXT);
+    let empty_style = Style::default().fg(DIMMED);
+
+    let val = |s: &str| -> Span {
+        if s.is_empty() {
+            Span::styled("--", empty_style)
+        } else {
+            Span::styled(s.to_string(), value_style)
+        }
+    };
+
+    let (status_icon, status_color) = status_indicator(&server.status);
+    let (wg_icon, wg_color) = status_indicator(&server.wg_status);
+    let (zbx_icon, zbx_color) = status_indicator(&server.zabbix_status);
+    let (fb_icon, fb_color) = status_indicator(&server.fluentbit_status);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  Name:          ", label_style),
+            val(&server.name),
+        ]),
+        Line::from(vec![
+            Span::styled("  Hostname:      ", label_style),
+            val(&server.hostname),
+        ]),
+        Line::from(vec![
+            Span::styled("  Host Type:     ", label_style),
+            val(&server.host_type),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Mesh IP:       ", label_style),
+            val(&server.host),
+        ]),
+        Line::from(vec![
+            Span::styled("  Public IP:     ", label_style),
+            val(&server.ip_public),
+        ]),
+        Line::from(vec![
+            Span::styled("  Subnet:        ", label_style),
+            val(&server.subnet),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Port SSH:      ", label_style),
+            Span::styled(server.port.to_string(), value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  User:          ", label_style),
+            val(&server.user),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Status:        ", label_style),
+            Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+            val(&server.status),
+        ]),
+        Line::from(vec![
+            Span::styled("  WG Status:     ", label_style),
+            Span::styled(format!("{} ", wg_icon), Style::default().fg(wg_color)),
+            val(&server.wg_status),
+        ]),
+        Line::from(vec![
+            Span::styled("  Zabbix Status: ", label_style),
+            Span::styled(format!("{} ", zbx_icon), Style::default().fg(zbx_color)),
+            val(&server.zabbix_status),
+        ]),
+        Line::from(vec![
+            Span::styled("  FluentBit:     ", label_style),
+            Span::styled(format!("{} ", fb_icon), Style::default().fg(fb_color)),
+            val(&server.fluentbit_status),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Host Name:     ", label_style),
+            val(&server.host_name),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, popup_area);
+}
+
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
@@ -796,6 +957,36 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(" Próxima "),
             ])
         }
+        AppMode::Detail => Line::from(vec![
+            Span::styled(
+                " DETAIL ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(MAUVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            key_hint("Esc"),
+            Span::raw(" Fechar "),
+            key_hint("i"),
+            Span::raw(" Fechar "),
+        ]),
+        AppMode::Browse if app.clipboard_msg.is_some() => {
+            let msg = app.clipboard_msg.as_ref().unwrap();
+            Line::from(vec![
+                Span::styled(
+                    " CLIPBOARD ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(GREEN)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {} ", msg),
+                    Style::default().fg(GREEN),
+                ),
+            ])
+        }
         AppMode::Browse => {
             let mut hints = vec![
                 key_hint("q"),
@@ -804,6 +995,10 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(" Buscar "),
                 key_hint("Enter"),
                 Span::raw(" Conectar "),
+                key_hint("i"),
+                Span::raw(" Info "),
+                key_hint("c"),
+                Span::raw(" Copiar "),
                 key_hint("Tab"),
                 Span::raw(" Painel "),
                 key_hint("↑↓"),

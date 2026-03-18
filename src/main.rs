@@ -241,8 +241,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     },
 
+                    AppMode::Detail => match key.code {
+                        KeyCode::Esc | KeyCode::Char('i') => app.close_detail(),
+                        _ => {}
+                    },
+
                     AppMode::Browse => {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                        // Clear clipboard message on any keypress
+                        app.clear_clipboard_msg();
 
                         // Ctrl+ combos primeiro (antes do match geral)
                         if ctrl {
@@ -272,6 +280,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.go_back_nav()
                             }
                             KeyCode::Char('/') => app.enter_search(),
+                            KeyCode::Char('i') => app.show_detail(),
+                            KeyCode::Char('c') => app.copy_ip(),
                             KeyCode::Tab => app.toggle_sidebar_focus(),
                             #[cfg(feature = "api")]
                             KeyCode::F(5) => {

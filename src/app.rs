@@ -19,6 +19,9 @@ pub enum SidebarItem {
     GroupHeader { prefix: String, expanded: bool, count: usize },
     /// Sub-item de grupo → category_index
     GroupChild(usize),
+    /// Conexão recente → index em recent_connections
+    RecentHeader,
+    Recent(usize),
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -29,6 +32,8 @@ pub enum AppMode {
     Search,
     /// Terminal ativo recebendo input
     Terminal,
+    /// Popup de detalhes do servidor
+    Detail,
 }
 
 pub struct App {
@@ -56,6 +61,15 @@ pub struct App {
     // Tabs de terminal
     pub tabs: Vec<TerminalSession>,
     pub active_tab: Option<usize>,
+
+    // Detail popup
+    pub detail_server: Option<Server>,
+
+    // Recent connections (max 5)
+    pub recent_connections: Vec<Server>,
+
+    // Clipboard message (temporary)
+    pub clipboard_msg: Option<String>,
 
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
@@ -87,6 +101,9 @@ impl App {
             is_global_search: false,
             tabs: Vec::new(),
             active_tab: None,
+            detail_server: None,
+            recent_connections: Vec::new(),
+            clipboard_msg: None,
             #[cfg(feature = "api")]
             api_client: None,
         };
@@ -99,6 +116,15 @@ impl App {
     /// Reconstrói a lista de items visíveis no sidebar
     pub fn rebuild_sidebar(&mut self) {
         self.sidebar_items.clear();
+
+        // Recents section at the top
+        if !self.recent_connections.is_empty() {
+            self.sidebar_items.push(SidebarItem::RecentHeader);
+            for i in 0..self.recent_connections.len() {
+                self.sidebar_items.push(SidebarItem::Recent(i));
+            }
+        }
+
         let mut vm_total = 0usize;
         let mut vm_indices: Vec<usize> = Vec::new();
 
@@ -131,7 +157,7 @@ impl App {
     fn selected_category_index(&self) -> Option<usize> {
         match self.sidebar_items.get(self.sidebar_index)? {
             SidebarItem::Category(i) | SidebarItem::GroupChild(i) => Some(*i),
-            SidebarItem::GroupHeader { .. } => None,
+            SidebarItem::GroupHeader { .. } | SidebarItem::RecentHeader | SidebarItem::Recent(_) => None,
         }
     }
 
@@ -234,16 +260,29 @@ impl App {
     pub fn enter_nav(&mut self) {
         match self.sidebar_focus {
             SidebarFocus::Sidebar => {
-                // Se é um GroupHeader, toggle expand/collapse
-                if let Some(SidebarItem::GroupHeader { .. }) = self.sidebar_items.get(self.sidebar_index) {
-                    self.vm_expanded = !self.vm_expanded;
-                    self.rebuild_sidebar();
-                    return;
-                }
-                // Se é uma categoria, foca na lista de servidores
-                if self.selected_category_index().is_some() {
-                    self.sidebar_focus = SidebarFocus::ServerList;
-                    self.server_index = 0;
+                match self.sidebar_items.get(self.sidebar_index) {
+                    // GroupHeader: toggle expand/collapse
+                    Some(SidebarItem::GroupHeader { .. }) => {
+                        self.vm_expanded = !self.vm_expanded;
+                        self.rebuild_sidebar();
+                        return;
+                    }
+                    // RecentHeader: non-interactive
+                    Some(SidebarItem::RecentHeader) => {}
+                    // Recent item: connect directly
+                    Some(SidebarItem::Recent(idx)) => {
+                        let idx = *idx;
+                        if let Some(server) = self.recent_connections.get(idx).cloned() {
+                            self.open_terminal(&server);
+                        }
+                    }
+                    // Category or GroupChild: focus server list
+                    _ => {
+                        if self.selected_category_index().is_some() {
+                            self.sidebar_focus = SidebarFocus::ServerList;
+                            self.server_index = 0;
+                        }
+                    }
                 }
             }
             SidebarFocus::ServerList => {
@@ -260,6 +299,9 @@ impl App {
             AppMode::Search => {
                 self.mode = AppMode::Browse;
             }
+            AppMode::Detail => {
+                self.close_detail();
+            }
             AppMode::Browse => {
                 if self.sidebar_focus == SidebarFocus::ServerList {
                     self.sidebar_focus = SidebarFocus::Sidebar;
@@ -275,6 +317,66 @@ impl App {
             SidebarFocus::ServerList => SidebarFocus::Sidebar,
         };
     }
+
+    // ─── Detail popup ─────────────────────────────────────────────
+
+    pub fn show_detail(&mut self) {
+        if let Some(&real_index) = self.filtered_indices.get(self.server_index) {
+            let server = self.current_servers()[real_index].clone();
+            self.detail_server = Some(server);
+            self.mode = AppMode::Detail;
+        }
+    }
+
+    pub fn close_detail(&mut self) {
+        self.detail_server = None;
+        self.mode = AppMode::Browse;
+    }
+
+    // ─── Recent connections ─────────────────────────────────────────
+
+    fn push_recent(&mut self, server: &Server) {
+        // Remove duplicate by name
+        self.recent_connections.retain(|s| s.name != server.name);
+        // Push to front
+        self.recent_connections.insert(0, server.clone());
+        // Keep max 5
+        self.recent_connections.truncate(5);
+        self.rebuild_sidebar();
+    }
+
+    #[allow(dead_code)]
+    pub fn recent_servers(&self) -> &[Server] {
+        &self.recent_connections
+    }
+
+    // ─── Clipboard ──────────────────────────────────────────────────
+
+    pub fn copy_ip(&mut self) {
+        // Clear any previous message
+        self.clipboard_msg = None;
+
+        if let Some(&real_index) = self.filtered_indices.get(self.server_index) {
+            let server = &self.current_servers()[real_index];
+            let ip = if !server.host.is_empty() {
+                server.host.clone()
+            } else {
+                return;
+            };
+
+            if copy_to_clipboard(&ip) {
+                self.clipboard_msg = Some(format!("IP copiado: {}", ip));
+            } else {
+                self.clipboard_msg = Some("Falha ao copiar IP".to_string());
+            }
+        }
+    }
+
+    pub fn clear_clipboard_msg(&mut self) {
+        self.clipboard_msg = None;
+    }
+
+    // ─── Search ─────────────────────────────────────────────────────
 
     pub fn enter_search(&mut self) {
         self.mode = AppMode::Search;
@@ -349,6 +451,7 @@ impl App {
     // ─── Tabs de terminal ────────────────────────────────────────────
 
     pub fn open_terminal(&mut self, server: &Server) {
+        self.push_recent(server);
         let key = self.config.settings.ssh_key.clone();
         // Dimensões iniciais razoáveis — serão ajustadas no primeiro resize
         match TerminalSession::new(server, &key, 220, 50) {
@@ -460,5 +563,66 @@ impl App {
         { self.api_client.is_some() }
         #[cfg(not(feature = "api"))]
         { false }
+    }
+}
+
+// ── Clipboard helper ─────────────────────────────────────────────────────────
+
+fn copy_to_clipboard(text: &str) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try xclip, then xsel, then wl-copy, then clip.exe (WSL)
+        let commands: &[(&str, &[&str])] = &[
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+            ("wl-copy", &[]),
+            ("clip.exe", &[]),
+        ];
+        for &(cmd, args) in commands {
+            if let Ok(mut child) = Command::new(cmd)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                return child.wait().map(|s| s.success()).unwrap_or(false);
+            }
+        }
+        false
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut child) = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            return child.wait().map(|s| s.success()).unwrap_or(false);
+        }
+        false
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(mut child) = Command::new("clip.exe")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            return child.wait().map(|s| s.success()).unwrap_or(false);
+        }
+        false
     }
 }
