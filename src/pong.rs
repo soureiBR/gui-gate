@@ -1,6 +1,8 @@
 //! SoureiGate PONG — Multiplayer Pong over UDP
 //! Activated with :pong or :pong <host_ip> in command input
 
+use std::process::Command;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -313,6 +315,39 @@ impl PongGame {
 
 // ── Render ───────────────────────────────────────────────────────────────────
 
+/// Busca IP da mesh WireGuard (10.254.*) via `ip addr` ou `ifconfig`
+fn get_mesh_ip() -> Option<String> {
+    // Tenta `ip addr show` (Linux)
+    if let Ok(output) = Command::new("ip").args(["addr", "show"]).output() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("inet ") && trimmed.contains("10.254.") {
+                // "inet 10.254.1.2/24 ..." → extrair IP
+                if let Some(ip) = trimmed.split_whitespace().nth(1) {
+                    if let Some(ip) = ip.split('/').next() {
+                        return Some(ip.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: tenta conectar num IP da mesh pra descobrir o local
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("10.254.0.1:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip.starts_with("10.254.") {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn draw_pong(frame: &mut Frame, area: Rect, game: &PongGame) {
     let buf = frame.buffer_mut();
 
@@ -383,22 +418,11 @@ pub fn draw_pong(frame: &mut Frame, area: Rect, game: &PongGame) {
         put_str_centered(buf, area, area.y + cy + 1, &msg2, WAITING_COLOR);
         put_str_centered(buf, area, area.y + cy + 3, msg3, Color::Rgb(150, 150, 100));
 
-        // Try to show local IP
-        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-            // Connect to a known address to determine local IP
-            if socket.connect("10.0.0.1:80").is_ok() || socket.connect("8.8.8.8:80").is_ok() {
-                if let Ok(local_addr) = socket.local_addr() {
-                    let ip_msg = format!("Your IP: {}", local_addr.ip());
-                    put_str_centered(
-                        buf,
-                        area,
-                        area.y + cy + 5,
-                        &ip_msg,
-                        Color::Rgb(100, 255, 100),
-                    );
-                }
-            }
-        }
+        // Pega o IP da mesh WireGuard (10.254.*)
+        let mesh_ip = get_mesh_ip().unwrap_or_else(|| "unknown".to_string());
+        let ip_msg = format!("Your IP: {}:{}", mesh_ip, PONG_PORT);
+        put_str_centered(buf, area, area.y + cy + 5, &ip_msg, Color::Rgb(100, 255, 100));
+        put_str_centered(buf, area, area.y + cy + 7, &format!(":pong {}", mesh_ip), Color::Rgb(150, 150, 150));
     }
 
     // Winner overlay
