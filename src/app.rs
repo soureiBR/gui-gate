@@ -1057,8 +1057,15 @@ impl App {
 
     pub fn confirm_danger(&mut self) {
         if let Some(cmd) = self.danger_command.take() {
-            let shell_cmd = format!("{}\n", cmd);
-            let bytes = shell_cmd.into_bytes();
+            // Se o comando veio do :run ou palette, manda cmd+\n
+            // Se veio da interceptação do Enter (já digitado no terminal), manda só \n
+            let is_from_terminal = self.mode == AppMode::ConfirmDanger;
+            let bytes: Vec<u8> = if cmd.contains('\n') || !is_from_terminal {
+                format!("{}\n", cmd).into_bytes()
+            } else {
+                // Comando já tá digitado no terminal, só manda Enter
+                b"\r".to_vec()
+            };
             if self.danger_broadcast {
                 self.write_input_all(&bytes);
             } else if let Some(session) = self.active_session_mut() {

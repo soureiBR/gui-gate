@@ -139,6 +139,32 @@ impl TerminalSession {
         self.is_dead.load(Ordering::Relaxed)
     }
 
+    /// Lê a linha atual onde o cursor está (pra detectar comandos perigosos)
+    pub fn current_line(&self) -> String {
+        use alacritty_terminal::index::Column;
+        use alacritty_terminal::grid::Dimensions;
+
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cursor_line = grid.cursor.point.line;
+        let columns = term.columns();
+
+        let mut line = String::new();
+        for col in 0..columns {
+            let cell = &grid[cursor_line][Column(col)];
+            if cell.c != '\0' {
+                line.push(cell.c);
+            }
+        }
+        // Pega só o que vem depois do último $ ou # ou > (prompt)
+        let trimmed = line.trim();
+        if let Some(pos) = trimmed.rfind(|c| c == '$' || c == '#' || c == '>') {
+            trimmed[pos + 1..].trim().to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     pub fn scroll_up(&mut self, lines: usize) {
         use alacritty_terminal::grid::Scroll;
         let mut term = self.term.lock();

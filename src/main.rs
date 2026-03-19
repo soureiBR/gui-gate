@@ -553,9 +553,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             key_to_bytes(key.code, ctrl, shift, alt);
 
                         if let Some(b) = bytes {
+                            // Intercepta Enter — checa comando perigoso na linha atual
+                            if key.code == KeyCode::Enter {
+                                let current_cmd = app.active_session()
+                                    .map(|s| s.current_line())
+                                    .unwrap_or_default();
+                                if !current_cmd.is_empty() && App::is_dangerous_command(&current_cmd) {
+                                    app.danger_command = Some(current_cmd);
+                                    app.danger_broadcast = app.broadcast;
+                                    app.mode = AppMode::ConfirmDanger;
+                                    continue;
+                                }
+                            }
+
                             if app.broadcast {
                                 app.write_input_all(&b);
-                                // Reset scroll on all tabs
                                 for session in &mut app.tabs {
                                     session.scroll_reset();
                                 }
