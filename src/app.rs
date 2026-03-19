@@ -56,6 +56,8 @@ pub enum AppMode {
     CommandInput,
     /// Dangerous command confirmation
     ConfirmDanger,
+    /// Easter egg 🎮
+    Doom,
 }
 
 pub struct ContextMenu {
@@ -196,6 +198,9 @@ pub struct App {
     pub danger_command: Option<String>,
     pub danger_broadcast: bool,
 
+    // Doom Easter egg
+    pub doom: Option<crate::doom::DoomGame>,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -253,6 +258,7 @@ impl App {
             mouse_select_end: None,
             danger_command: None,
             danger_broadcast: false,
+            doom: None,
             #[cfg(feature = "api")]
             api_client: None,
             gate_online: true,
@@ -490,6 +496,9 @@ impl App {
             }
             AppMode::ConfirmDanger => {
                 self.cancel_danger();
+            }
+            AppMode::Doom => {
+                self.mode = AppMode::Terminal;
             }
         }
     }
@@ -747,6 +756,11 @@ impl App {
                         }
                     }
                 }
+            }
+            // :doom — Easter egg 🎮
+            "doom" => {
+                self.doom = Some(crate::doom::DoomGame::new(80));
+                self.mode = AppMode::Doom;
             }
             // :split — toggle split
             "split" | "sp" => { self.toggle_split(); }

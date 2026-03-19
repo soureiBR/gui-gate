@@ -2,6 +2,7 @@ mod app;
 #[cfg(feature = "api")]
 mod api;
 mod config;
+mod doom;
 mod filter;
 mod terminal;
 mod ui;
@@ -185,6 +186,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = app.refresh_from_api();
                 last_refresh = std::time::Instant::now();
                 last_gate_check = std::time::Instant::now();
+            }
+        }
+        // Doom tick
+        if app.mode == AppMode::Doom {
+            let sz = terminal.size()?;
+            if let Some(ref mut game) = app.doom {
+                game.tick(sz.width, sz.height);
             }
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
@@ -576,6 +584,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 session.scroll_reset();
                             }
                         }
+                    }
+
+                    AppMode::Doom => {
+                        let sz = terminal.size()?;
+                        if let Some(ref mut game) = app.doom {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.doom = None;
+                                    app.mode = AppMode::Terminal;
+                                }
+                                KeyCode::Left | KeyCode::Char('a') => game.move_left(),
+                                KeyCode::Right | KeyCode::Char('d') => game.move_right(sz.width),
+                                KeyCode::Char(' ') | KeyCode::Up => game.shoot(sz.height),
+                                KeyCode::Char('r') => game.restart(sz.width),
+                                _ => {}
+                            }
+                        }
+                        continue;
                     }
 
                     AppMode::ConfirmDanger => match key.code {

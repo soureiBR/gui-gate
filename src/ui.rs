@@ -166,6 +166,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_help_popup(frame, area, app);
     }
 
+    // Doom Easter egg overlay
+    if app.mode == AppMode::Doom {
+        if let Some(ref game) = app.doom {
+            crate::doom::draw_doom(frame, area, game);
+        }
+    }
+
     // Context menu overlay
     if let Some(ref menu) = app.context_menu {
         draw_context_menu(frame, area, menu);
@@ -1725,6 +1732,13 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             key_hint("↑↓"),
             Span::raw(" Scroll "),
         ]),
+        AppMode::Doom => {
+            if let Some(ref game) = app.doom {
+                crate::doom::draw_doom_statusbar(game)
+            } else {
+                Line::from("")
+            }
+        }
         AppMode::Browse => {
             let mut hints = vec![];
             if app.has_selection() {
