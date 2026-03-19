@@ -53,6 +53,10 @@ pub struct TerminalSession {
     pub term: Arc<FairMutex<Term<TermEventProxy>>>,
     pub notifier: Notifier,
     pub is_dead: Arc<AtomicBool>,
+    pub connected_at: std::time::Instant,
+    pub server_host: String,
+    pub server_port: u16,
+    pub server_user: String,
 }
 
 impl TerminalSession {
@@ -108,6 +112,10 @@ impl TerminalSession {
             term,
             notifier,
             is_dead,
+            connected_at: std::time::Instant::now(),
+            server_host: server.host.clone(),
+            server_port: server.port,
+            server_user: server.user.clone(),
         })
     }
 

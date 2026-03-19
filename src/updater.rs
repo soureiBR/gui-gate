@@ -64,7 +64,7 @@ fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn std::error::Error>> {
 
     let tag = json["tag_name"]
         .as_str()
-        .ok_or("tag_name não encontrado")?
+        .ok_or("tag_name not found")?
         .to_string();
 
     let version = tag.trim_start_matches('v').to_string();
@@ -99,7 +99,7 @@ pub fn check_update_quiet() {
             "╔══════════════════════════════════════════════╗"
         );
         eprintln!(
-            "║  Nova versão disponível: v{} → v{}",
+            "║  New version available: v{} → v{}",
             CURRENT_VERSION,
             release.version
         );
@@ -115,17 +115,17 @@ pub fn check_update_quiet() {
 
 /// Executa o auto-update
 pub fn run_update() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("Verificando atualizações...\n");
+    eprintln!("Checking for updates...\n");
 
     let release = fetch_latest_release()?;
 
     if !is_newer(&release.version, CURRENT_VERSION) {
-        eprintln!("✓ Você já está na versão mais recente (v{})", CURRENT_VERSION);
+        eprintln!("✓ Already on the latest version (v{})", CURRENT_VERSION);
         return Ok(());
     }
 
     eprintln!(
-        "Nova versão: v{} → v{}\n",
+        "New version: v{} → v{}\n",
         CURRENT_VERSION, release.version
     );
 
@@ -137,7 +137,7 @@ pub fn run_update() -> Result<(), Box<dyn std::error::Error>> {
         .find(|a| a.name == target_asset)
         .ok_or_else(|| {
             format!(
-                "Asset '{}' não encontrado na release. Assets disponíveis: {}",
+                "Asset '{}' not found in release. Available assets: {}",
                 target_asset,
                 release
                     .assets
@@ -148,7 +148,7 @@ pub fn run_update() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
 
-    eprintln!("Baixando {}...", asset.name);
+    eprintln!("Downloading {}...", asset.name);
 
     let client = reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -159,18 +159,18 @@ pub fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     let resp = client.get(&asset.download_url).send()?;
 
     if !resp.status().is_success() {
-        return Err(format!("Download falhou: {}", resp.status()).into());
+        return Err(format!("Download failed: {}", resp.status()).into());
     }
 
     let bytes = resp.bytes()?;
-    eprintln!("✓ Download completo ({:.1} MB)\n", bytes.len() as f64 / 1_048_576.0);
+    eprintln!("✓ Download complete ({:.1} MB)\n", bytes.len() as f64 / 1_048_576.0);
 
     // Substitui o binário atual
     let current_exe = std::env::current_exe()?;
     replace_binary(&current_exe, &bytes)?;
 
-    eprintln!("✓ Atualizado para v{}!", release.version);
-    eprintln!("  Reinicie o gate para usar a nova versão.");
+    eprintln!("✓ Updated to v{}!", release.version);
+    eprintln!("  Restart gate to use the new version.");
 
     Ok(())
 }

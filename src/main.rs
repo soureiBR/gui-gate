@@ -54,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "api")]
     updater::check_update_quiet();
 
+    #[allow(unused_mut)]
     let mut config = Config::load()?;
     #[cfg(feature = "api")]
     let mut _api_client: Option<api::ApiClient> = None;
@@ -68,10 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or_else(|| {
                 // Pergunta interativamente
                 eprintln!("╔══════════════════════════════════════╗");
-                eprintln!("║    SoureiGate — Primeiro Acesso      ║");
+                eprintln!("║    SoureiGate — First Setup           ║");
                 eprintln!("╚══════════════════════════════════════╝");
                 eprintln!();
-                eprintln!("Informe a URL da API Gate:");
+                eprintln!("Enter Gate API URL:");
                 eprint!("> ");
                 let mut input = String::new();
                 io::stdin().read_line(&mut input).ok()?;
@@ -83,10 +84,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(u) => {
                 config.setup_api(&u);
                 config.save_to_config_dir()?;
-                eprintln!("✓ Configuração salva em ~/.config/soureigate/servers.toml\n");
+                eprintln!("✓ Config saved to ~/.config/soureigate/servers.toml\n");
             }
             None => {
-                eprintln!("Uso: gate <URL_DA_API>");
+                eprintln!("Usage: gate <API_URL>");
                 eprintln!("  Ex: gate https://gate.sourei.dev.br");
                 std::process::exit(1);
             }
@@ -104,21 +105,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let client = api::ApiClient::login(&api_url)?;
 
-        eprintln!("Carregando servidores...");
+        eprintln!("Loading servers...");
         let categories = client.fetch_categories()?;
         let total: usize = categories.iter().map(|c| c.servers.len()).sum();
         eprintln!("✓ {} categorias, {} servidores carregados\n", categories.len(), total);
 
         // Baixa a SSH key do admin logado via API
-        eprintln!("Baixando chave SSH...");
+        eprintln!("Downloading SSH key...");
         let ssh_key = match client.fetch_and_save_ssh_key() {
             Ok(path) => {
-                eprintln!("✓ Chave SSH configurada\n");
+                eprintln!("✓ SSH key configured\n");
                 path.to_string_lossy().into_owned()
             }
             Err(e) => {
-                eprintln!("⚠ Não foi possível baixar SSH key: {}", e);
-                eprintln!("  Conexões SSH podem falhar sem chave.\n");
+                eprintln!("⚠ Could not download SSH key: {}", e);
+                eprintln!("  SSH connections may fail without key.\n");
                 String::new()
             }
         };
@@ -128,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _api_client = Some(client);
 
         // Aguarda Enter antes de abrir TUI — garante foco na janela do terminal
-        eprintln!("Pressione Enter para abrir o SoureiGate...");
+        eprintln!("Press Enter to open SoureiGate...");
         let mut _buf = String::new();
         io::stdin().read_line(&mut _buf).ok();
     }
@@ -137,8 +138,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !config.loaded_from_api {
         let key_path = &config.settings.ssh_key;
         if !key_path.is_empty() && !std::path::Path::new(key_path).exists() {
-            eprintln!("Chave SSH não encontrada: {}", key_path);
-            eprintln!("Edite servers.toml e ajuste ssh_key");
+            eprintln!("SSH key not found: {}", key_path);
+            eprintln!("Edit servers.toml and adjust ssh_key");
             std::process::exit(1);
         }
     }
@@ -469,56 +470,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.toggle_broadcast();
                                 continue;
                             }
-                            KeyCode::F(6) => {
-                                let cmd = b"htop\n";
-                                if app.broadcast {
-                                    app.write_input_all(cmd);
-                                } else if let Some(session) = app.active_session_mut() {
-                                    session.write_input(cmd.to_vec());
-                                }
-                                continue;
-                            }
-                            KeyCode::F(7) => {
-                                let cmd = b"docker ps -a\n";
-                                if app.broadcast {
-                                    app.write_input_all(cmd);
-                                } else if let Some(session) = app.active_session_mut() {
-                                    session.write_input(cmd.to_vec());
-                                }
-                                continue;
-                            }
-                            KeyCode::F(8) => {
-                                let cmd = b"journalctl -f --no-pager\n";
-                                if app.broadcast {
-                                    app.write_input_all(cmd);
-                                } else if let Some(session) = app.active_session_mut() {
-                                    session.write_input(cmd.to_vec());
-                                }
-                                continue;
-                            }
-                            KeyCode::F(9) => {
-                                // Scroll up 10 lines
-                                if let Some(session) = app.active_session_mut() {
-                                    session.scroll_up(10);
-                                }
-                                continue;
-                            }
-                            KeyCode::F(10) => {
-                                // Scroll down 10 lines
-                                if let Some(session) = app.active_session_mut() {
-                                    session.scroll_down(10);
-                                }
-                                continue;
-                            }
-                            KeyCode::F(12) => {
-                                // Copy últimas 50 linhas pro clipboard
-                                if let Some(session) = app.active_session() {
-                                    let text = session.copy_lines(50);
-                                    if app::copy_to_clipboard(&text) {
-                                        app.clipboard_msg = Some("50 linhas copiadas!".into());
+                            KeyCode::F(n) if n >= 6 && n <= 12 => {
+                                // F9/F10 scroll if no command mapped
+                                let key_name = format!("F{}", n);
+                                if let Some(snippet) = app.config.commands.iter().find(|c| c.key == key_name).cloned() {
+                                    if App::is_dangerous_command(&snippet.command) {
+                                        app.danger_command = Some(snippet.command);
+                                        app.danger_broadcast = app.broadcast;
+                                        app.mode = AppMode::ConfirmDanger;
                                     } else {
-                                        app.clipboard_msg = Some("Falha: instale xclip (sudo apt install xclip)".into());
+                                        let cmd = format!("{}\n", snippet.command);
+                                        let bytes = cmd.into_bytes();
+                                        if app.broadcast {
+                                            app.write_input_all(&bytes);
+                                        } else if let Some(session) = app.active_session_mut() {
+                                            session.write_input(bytes);
+                                        }
                                     }
+                                    continue;
+                                }
+                                // Default scroll for F9/F10 if not mapped
+                                match n {
+                                    9 => {
+                                        if let Some(session) = app.active_session_mut() {
+                                            session.scroll_up(10);
+                                        }
+                                    }
+                                    10 => {
+                                        if let Some(session) = app.active_session_mut() {
+                                            session.scroll_down(10);
+                                        }
+                                    }
+                                    12 => {
+                                        if let Some(session) = app.active_session() {
+                                            let text = session.copy_lines(50);
+                                            if app::copy_to_clipboard(&text) {
+                                                app.clipboard_msg = Some("50 lines copied!".into());
+                                            } else {
+                                                app.clipboard_msg = Some("Failed: install xclip (sudo apt install xclip)".into());
+                                            }
+                                        }
+                                    }
+                                    _ => {}
                                 }
                                 continue;
                             }
@@ -572,6 +565,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+
+                    AppMode::ConfirmDanger => match key.code {
+                        KeyCode::Char('y') | KeyCode::Enter => { app.confirm_danger(); continue; }
+                        KeyCode::Char('n') | KeyCode::Esc => { app.cancel_danger(); continue; }
+                        _ => { continue; }
+                    },
 
                     AppMode::CommandInput => match key.code {
                         KeyCode::Esc => app.cancel_command_input(),
@@ -678,7 +677,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             #[cfg(feature = "api")]
                             KeyCode::F(5) => {
                                 if let Err(e) = app.refresh_from_api() {
-                                    eprintln!("Refresh falhou: {}", e);
+                                    eprintln!("Refresh failed: {}", e);
                                 }
                                 last_refresh = std::time::Instant::now();
                             }
@@ -767,7 +766,7 @@ fn self_install() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(unix)]
     {
-        let home = dirs::home_dir().ok_or("HOME não encontrado")?;
+        let home = dirs::home_dir().ok_or("HOME not found")?;
         let install_dir = home.join(".local").join("bin");
         std::fs::create_dir_all(&install_dir)?;
 
@@ -806,7 +805,7 @@ fn self_install() -> Result<(), Box<dyn std::error::Error>> {
                                 f.write_all(addition.as_bytes())
                             })
                             .ok();
-                        eprintln!("✓ PATH adicionado em {}", rc.display());
+                        eprintln!("✓ PATH added to {}", rc.display());
                         added = true;
                         break;
                     }
@@ -815,18 +814,18 @@ fn self_install() -> Result<(), Box<dyn std::error::Error>> {
 
             if !added {
                 eprintln!();
-                eprintln!("Adicione ao PATH manualmente:");
+                eprintln!("Add to PATH manually:");
                 eprintln!("  {}", export_line);
             }
         } else {
-            eprintln!("✓ PATH já configurado");
+            eprintln!("✓ PATH already configured");
         }
     }
 
     #[cfg(windows)]
     {
         let install_dir = dirs::data_local_dir()
-            .ok_or("LOCALAPPDATA não encontrado")?
+            .ok_or("LOCALAPPDATA not found")?
             .join("SoureiGate");
         std::fs::create_dir_all(&install_dir)?;
 
@@ -858,12 +857,12 @@ fn self_install() -> Result<(), Box<dyn std::error::Error>> {
 
             match output {
                 Ok(o) => eprintln!("{}", String::from_utf8_lossy(&o.stdout).trim()),
-                Err(e) => eprintln!("⚠ Não conseguiu atualizar PATH: {}", e),
+                Err(e) => eprintln!("⚠ Could not update PATH: {}", e),
             }
         }
     }
 
     eprintln!();
-    eprintln!("Feche e reabra o terminal, depois digite: gate");
+    eprintln!("Close and reopen the terminal, then type: gate");
     Ok(())
 }

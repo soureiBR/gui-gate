@@ -216,7 +216,7 @@ impl ApiClient {
         // Testa se a API ta acessivel
         let status_url = format!("{}/api/status", base_url);
         http.get(&status_url).send().map_err(|e| {
-            format!("API inacessivel em {}: {}", base_url, e)
+            format!("API unreachable at {}: {}", base_url, e)
         })?;
 
         // Tenta reusar sessao salva
@@ -229,7 +229,7 @@ impl ApiClient {
 
             if let Ok(r) = resp {
                 if r.status().is_success() {
-                    eprintln!("\u{2713} Sessao valida\n");
+                    eprintln!("\u{2713} Session valid, skipping login\n");
                     return Ok(Self {
                         base_url: base_url.to_string(),
                         jwt: session.access_token,
@@ -241,10 +241,10 @@ impl ApiClient {
 
             // Access token expirado -> tenta refresh
             if !session.refresh_token.is_empty() {
-                eprintln!("Token expirado, renovando...");
+                eprintln!("Token expired, refreshing...");
                 if let Ok(new_session) = try_refresh(&http, base_url, &session.refresh_token) {
                     save_session(&new_session.access_token, &new_session.refresh_token);
-                    eprintln!("\u{2713} Token renovado\n");
+                    eprintln!("\u{2713} Token refreshed\n");
                     return Ok(Self {
                         base_url: base_url.to_string(),
                         jwt: new_session.access_token,
@@ -256,7 +256,7 @@ impl ApiClient {
 
             // Refresh tambem falhou
             clear_session();
-            eprintln!("Sessao expirada, autenticando novamente...\n");
+            eprintln!("Session expired, re-authenticating...\n");
         }
 
         // Passkey login via browser
@@ -300,7 +300,7 @@ impl ApiClient {
         }
 
         if categories.is_empty() {
-            return Err("Nenhum host ou VM encontrado na API".into());
+            return Err("No hosts or VMs found in API".into());
         }
 
         Ok(categories)
@@ -338,7 +338,7 @@ impl ApiClient {
     /// Baixa a chave SSH do admin logado e salva em arquivo temporário
     pub fn fetch_and_save_ssh_key(&self) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let admin_id = self.admin_id()
-            .ok_or("Não foi possível extrair admin_id do JWT")?;
+            .ok_or("Could not extract admin_id from JWT")?;
 
         let url = format!("{}/api/admins/{}/ssh-key", self.base_url, admin_id);
         let resp = self.http.get(&url)
@@ -346,17 +346,17 @@ impl ApiClient {
             .send()?;
 
         if !resp.status().is_success() {
-            return Err(format!("Erro ao buscar SSH key: HTTP {}", resp.status()).into());
+            return Err(format!("Error fetching SSH key: HTTP {}", resp.status()).into());
         }
 
         let key_content = resp.text()?;
         if key_content.is_empty() || !key_content.contains("PRIVATE KEY") {
-            return Err("SSH key inválida ou vazia".into());
+            return Err("SSH key invalid or empty".into());
         }
 
         // Salva em ~/.config/soureigate/.ssh_key (temporário, chmod 600)
         let key_dir = dirs::config_dir()
-            .ok_or("Config dir não encontrado")?
+            .ok_or("Config dir not found")?
             .join("soureigate");
         std::fs::create_dir_all(&key_dir)?;
 
@@ -428,19 +428,19 @@ fn passkey_auth(base_url: &str) -> Result<(String, String), Box<dyn std::error::
 
     // Abre o browser
     let auth_url = format!("{}/cli-auth.html?port={}", base_url, port);
-    eprintln!("Abrindo browser para autenticacao...");
+    eprintln!("Opening browser for authentication...");
     eprintln!("   URL: {}", auth_url);
-    eprintln!("   Aguardando passkey...\n");
+    eprintln!("   Waiting for passkey...\n");
 
     open::that(&auth_url).map_err(|e| {
-        format!("Nao foi possivel abrir o browser: {}. Acesse manualmente: {}", e, auth_url)
+        format!("Could not open browser: {}. Access manually: {}", e, auth_url)
     })?;
 
     // Espera o callback com timeout
     listener.set_nonblocking(false)?;
     let (jwt, refresh) = wait_for_callback(listener)?;
 
-    eprintln!("\u{2713} Autenticado com sucesso!\n");
+    eprintln!("\u{2713} Authenticated successfully!\n");
     Ok((jwt, refresh))
 }
 

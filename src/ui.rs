@@ -193,7 +193,7 @@ fn draw_titlebar(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" \u{2502} ", Style::default().fg(DIMMED)),
         Span::styled(cat_name, Style::default().fg(PEACH)),
         Span::styled(
-            format!("  {} servidores", server_count),
+            format!("  {} servers", server_count),
             Style::default().fg(DIMMED),
         ),
     ];
@@ -235,7 +235,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
     draw_sidebar(frame, chunks[0], app);
 
     match app.mode {
-        AppMode::Terminal | AppMode::CommandInput => {
+        AppMode::Terminal | AppMode::CommandInput | AppMode::ConfirmDanger => {
             let has_split = app.split.is_some();
             let active_idx = app.active_tab;
 
@@ -510,10 +510,10 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         // ── Layout largo: Status | Nome | Mesh IP | IP Público | Serviços | User ──
         let header = Row::new(vec![
             Cell::from(""),
-            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Name").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("Mesh IP").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("IP Público").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("Serviços").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Public IP").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Services").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
         .style(Style::default().fg(ACCENT).bg(HEADER_BG))
@@ -564,8 +564,8 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
         // ── Layout médio: Status | Nome | Endereço | User ──
         let header = Row::new(vec![
             Cell::from(""),
-            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Name").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Address").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
         .style(Style::default().fg(ACCENT).bg(HEADER_BG))
@@ -608,8 +608,8 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         // ── Layout simples (modo TOML): Nome | Endereço | User ──
         let header = Row::new(vec![
-            Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Name").style(Style::default().add_modifier(Modifier::BOLD)),
+            Cell::from("Address").style(Style::default().add_modifier(Modifier::BOLD)),
             Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
         ])
         .style(Style::default().fg(ACCENT).bg(HEADER_BG))
@@ -652,16 +652,16 @@ fn draw_server_list(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_global_search(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
-        .title(format!(" Busca: {}▎ ", app.search_query))
+        .title(format!(" Search: {}▎ ", app.search_query))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACTIVE_BORDER));
 
     if app.global_results.is_empty() {
         let msg = if app.search_query.is_empty() {
-            "Digite para buscar em todos os servidores..."
+            "Type to search all servers..."
         } else {
-            "Nenhum resultado encontrado"
+            "No results found"
         };
         frame.render_widget(
             Paragraph::new(msg)
@@ -673,9 +673,9 @@ fn draw_global_search(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let header = Row::new(vec![
-        Cell::from("Nome").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("Endereço").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("Categoria").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Name").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Address").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Category").style(Style::default().add_modifier(Modifier::BOLD)),
     ])
     .style(Style::default().fg(ACCENT).bg(HEADER_BG))
     .height(1);
@@ -709,7 +709,7 @@ fn draw_global_search(frame: &mut Frame, area: Rect, app: &App) {
     let name_w = inner_w.saturating_sub(addr_w + cat_w);
 
     let count = app.global_results.len();
-    let block = block.title_bottom(format!(" {} resultados ", count));
+    let block = block.title_bottom(format!(" {} results ", count));
 
     let table = Table::new(rows, [
         Constraint::Length(name_w),
@@ -746,17 +746,23 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     let inner = if tab_count > 1 {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)])
             .split(block.inner(area));
 
         frame.render_widget(block, area);
         draw_tab_bar(frame, chunks[0], app);
-        chunks[1]
+        draw_info_bar(frame, chunks[1], &app.tabs[tab_idx]);
+        chunks[2]
     } else {
         app.mouse_tab_bar = None;
-        let inner = block.inner(area);
+        let block_inner = block.inner(area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(block_inner);
         frame.render_widget(block, area);
-        inner
+        draw_info_bar(frame, chunks[0], &app.tabs[tab_idx]);
+        chunks[1]
     };
 
     let session = &app.tabs[tab_idx];
@@ -1048,11 +1054,41 @@ fn draw_split_pane(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    draw_info_bar(frame, chunks[0], session);
+
     if session.is_dead() {
-        draw_dead_session_overlay(frame, inner, &session.name);
+        draw_dead_session_overlay(frame, chunks[1], &session.name);
     } else {
-        frame.render_widget(TermWidget { session, selection: None }, inner);
+        frame.render_widget(TermWidget { session, selection: None }, chunks[1]);
     }
+}
+
+/// Draws an info bar showing server connection details
+fn draw_info_bar(frame: &mut Frame, area: Rect, session: &TerminalSession) {
+    use crate::app::App;
+    let elapsed = App::format_elapsed(session.connected_at);
+    let line = Line::from(vec![
+        Span::styled("[", Style::default().fg(DIMMED)),
+        Span::styled(&session.server_user, Style::default().fg(SUBTEXT)),
+        Span::styled("@", Style::default().fg(DIMMED)),
+        Span::styled(
+            format!("{}:{}", session.server_host, session.server_port),
+            Style::default().fg(SUBTEXT),
+        ),
+        Span::styled("] ", Style::default().fg(DIMMED)),
+        Span::styled(session.name.as_str(), Style::default().fg(PEACH)),
+        Span::styled(" | ", Style::default().fg(DIMMED)),
+        Span::styled(elapsed, Style::default().fg(SUBTEXT)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(Color::Rgb(17, 17, 27))),
+        area,
+    );
 }
 
 /// Draws a "disconnected" overlay when a terminal session has died
@@ -1224,7 +1260,7 @@ fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
             " Command Palette ",
             Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(format!(" {} resultados ", result_count))
+        .title_bottom(format!(" {} results ", result_count))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(MAUVE))
@@ -1375,12 +1411,12 @@ fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
         help_entry("F6", "Run: htop"),
         help_entry("F7", "Run: docker ps"),
         help_entry("F8", "Run: journalctl -f"),
-        help_entry("Ctrl+X", "Linha de comando (:copy :scroll :run)"),
-        help_entry("Mouse drag", "Selecionar e copiar texto"),
-        help_entry("F9 / F10", "Scroll up/down 10 linhas"),
-        help_entry("Shift+Up/Down", "Scroll up/down 3 linhas"),
-        help_entry("F11", "Copiar tela pro clipboard"),
-        help_entry("F12", "Copiar ultimas 50 linhas"),
+        help_entry("Ctrl+X", "Command line (:copy :scroll :run)"),
+        help_entry("Mouse drag", "Select and copy text"),
+        help_entry("F9 / F10", "Scroll up/down 10 lines"),
+        help_entry("Shift+Up/Down", "Scroll up/down 3 lines"),
+        help_entry("F11", "Copy screen to clipboard"),
+        help_entry("F12", "Copy last 50 lines"),
         Line::from(""),
         section("General"),
         help_entry("F1", "This help"),
@@ -1500,7 +1536,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::styled(format!(" {} ", app.search_query), Style::default().fg(TEXT)),
             Span::styled(
-                "  Enter confirma, Esc cancela",
+                "  Enter confirm, Esc cancel",
                 Style::default().fg(DIMMED),
             ),
         ]),
@@ -1539,9 +1575,9 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 key_hint("Ctrl+B"),
                 Span::raw(" Sidebar "),
                 key_hint("Ctrl+W"),
-                Span::raw(" Fechar "),
+                Span::raw(" Close "),
                 key_hint("Ctrl+Tab"),
-                Span::raw(" Proxima "),
+                Span::raw(" Next "),
                 key_hint("F2"),
                 Span::raw(" Split "),
                 key_hint("F5"),
@@ -1563,7 +1599,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             }
             if app.is_split() {
                 spans.push(key_hint("F3/F4"));
-                spans.push(Span::raw(" Painel "));
+                spans.push(Span::raw(" Pane "));
             }
             Line::from(spans)
         }
@@ -1577,9 +1613,9 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::raw(" "),
             key_hint("Esc"),
-            Span::raw(" Fechar "),
+            Span::raw(" Close "),
             key_hint("i"),
-            Span::raw(" Fechar "),
+            Span::raw(" Close "),
         ]),
         AppMode::Palette => Line::from(vec![
             Span::styled(
@@ -1591,12 +1627,32 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::raw(" "),
             key_hint("Esc"),
-            Span::raw(" fechar "),
+            Span::raw(" close "),
             key_hint("Enter"),
-            Span::raw(" executar "),
+            Span::raw(" execute "),
             key_hint("↑↓"),
-            Span::raw(" navegar "),
+            Span::raw(" navigate "),
         ]),
+        AppMode::ConfirmDanger => {
+            let cmd_display = app.danger_command.as_deref().unwrap_or("?");
+            Line::from(vec![
+                Span::styled(
+                    " \u{26a0} DANGER ",
+                    Style::default()
+                        .fg(Color::Rgb(17, 17, 27))
+                        .bg(RED)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" \"{}\"", cmd_display),
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " \u{2014} Execute? (y/N)",
+                    Style::default().fg(SUBTEXT),
+                ),
+            ])
+        }
         AppMode::CommandInput => Line::from(vec![
             Span::styled(
                 " CMD ",
@@ -1622,7 +1678,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::raw(" "),
             key_hint("Esc/F1/q"),
-            Span::raw(" Fechar "),
+            Span::raw(" Close "),
             key_hint("↑↓"),
             Span::raw(" Scroll "),
         ]),
@@ -1635,21 +1691,21 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 ));
                 hints.push(Span::raw(" "));
                 hints.push(key_hint("Enter"));
-                hints.push(Span::raw(" Conectar selecionados "));
+                hints.push(Span::raw(" Connect selected "));
                 hints.push(key_hint("Space"));
-                hints.push(Span::raw(" Selecionar "));
+                hints.push(Span::raw(" Select "));
             } else {
                 hints.extend([
                     key_hint("q"),
-                    Span::raw(" Sair "),
+                    Span::raw(" Quit "),
                     key_hint("Enter"),
-                    Span::raw(" Conectar "),
+                    Span::raw(" Connect "),
                     key_hint("Space"),
-                    Span::raw(" Selecionar "),
+                    Span::raw(" Select "),
                     key_hint("i"),
                     Span::raw(" Info "),
                     key_hint("c"),
-                    Span::raw(" Copiar "),
+                    Span::raw(" Copy "),
                 ]);
             }
             hints.extend([
@@ -1666,7 +1722,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             }
             if !app.tabs.is_empty() {
                 hints.push(Span::styled(
-                    format!(" [{}] sessões", app.tabs.len()),
+                    format!(" [{}] sessions", app.tabs.len()),
                     Style::default().fg(ACCENT),
                 ));
             }

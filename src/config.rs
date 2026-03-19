@@ -1,7 +1,26 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+#[derive(Deserialize, Clone)]
+pub struct CommandSnippet {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub command: String,
+}
+
+fn default_commands() -> Vec<CommandSnippet> {
+    vec![
+        CommandSnippet { key: "F6".into(), name: "htop".into(), command: "htop".into() },
+        CommandSnippet { key: "F7".into(), name: "docker ps".into(), command: "docker ps -a".into() },
+        CommandSnippet { key: "F8".into(), name: "journalctl".into(), command: "journalctl -f --no-pager".into() },
+    ]
+}
+
 #[derive(Deserialize, Default)]
+#[allow(dead_code)]
 pub struct Config {
     #[serde(default)]
     pub settings: Settings,
@@ -9,6 +28,8 @@ pub struct Config {
     pub api: Option<ApiSettings>,
     #[serde(default)]
     pub categories: Vec<Category>,
+    #[serde(default = "default_commands")]
+    pub commands: Vec<CommandSnippet>,
     /// Flag interno: dados vieram da API (não exige SSH key local)
     #[serde(skip)]
     pub loaded_from_api: bool,
@@ -21,6 +42,7 @@ pub struct Settings {
 }
 
 #[derive(Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct ApiSettings {
     pub url: String,
 }
@@ -78,6 +100,7 @@ impl Server {
     }
 }
 
+#[allow(dead_code)]
 impl Config {
     /// Carrega config do TOML (pode ter só [api] sem categories)
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -105,6 +128,7 @@ impl Config {
             settings: Settings { ssh_key },
             api: None,
             categories,
+            commands: default_commands(),
             loaded_from_api: true,
         }
     }
@@ -129,15 +153,15 @@ impl Config {
     /// Salva config em ~/.config/soureigate/servers.toml
     pub fn save_to_config_dir(&self) -> Result<(), Box<dyn std::error::Error>> {
         let dir = dirs::config_dir()
-            .ok_or("Não foi possível encontrar config dir")?
+            .ok_or("Could not find config dir")?
             .join("soureigate");
         std::fs::create_dir_all(&dir)?;
 
         let path = dir.join("servers.toml");
         let content = if let Some(ref api) = self.api {
             format!(
-                "# SoureiGate — Configuração\n\
-                 # Gerado automaticamente\n\n\
+                "# SoureiGate — Configuration\n\
+                 # Auto-generated\n\n\
                  [api]\n\
                  url = \"{}\"\n\n\
                  [settings]\n\

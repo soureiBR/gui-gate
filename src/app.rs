@@ -54,6 +54,8 @@ pub enum AppMode {
     Help,
     /// Command input (mini prompt no terminal)
     CommandInput,
+    /// Dangerous command confirmation
+    ConfirmDanger,
 }
 
 pub struct ContextMenu {
@@ -109,6 +111,11 @@ pub enum PaletteAction {
     Logout,
     CopyIp(String),
     RunCommand(String),
+    ShowHelp,
+    CloseTab,
+    CopyLines(usize),
+    Reconnect,
+    ShowDetail,
 }
 
 pub struct App {
@@ -185,6 +192,10 @@ pub struct App {
     pub mouse_select_start: Option<(u16, u16)>,  // (col, row) relativo ao terminal
     pub mouse_select_end: Option<(u16, u16)>,
 
+    // Dangerous command confirmation
+    pub danger_command: Option<String>,
+    pub danger_broadcast: bool,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -240,12 +251,33 @@ impl App {
             mouse_selecting: false,
             mouse_select_start: None,
             mouse_select_end: None,
+            danger_command: None,
+            danger_broadcast: false,
             #[cfg(feature = "api")]
             api_client: None,
             gate_online: true,
         };
         app.rebuild_sidebar();
         app
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────
+
+    pub fn format_elapsed(instant: std::time::Instant) -> String {
+        let secs = instant.elapsed().as_secs();
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m", secs / 60)
+        } else {
+            let h = secs / 3600;
+            let m = (secs % 3600) / 60;
+            if m > 0 {
+                format!("{}h{}m", h, m)
+            } else {
+                format!("{}h", h)
+            }
+        }
     }
 
     // ─── Sidebar tree ──────────────────────────────────────────────
@@ -456,6 +488,9 @@ impl App {
             AppMode::CommandInput => {
                 self.cancel_command_input();
             }
+            AppMode::ConfirmDanger => {
+                self.cancel_danger();
+            }
         }
     }
 
@@ -513,9 +548,9 @@ impl App {
             };
 
             if copy_to_clipboard(&ip) {
-                self.clipboard_msg = Some(format!("IP copiado: {}", ip));
+                self.clipboard_msg = Some(format!("IP copied: {}", ip));
             } else {
-                self.clipboard_msg = Some("Falha ao copiar IP".to_string());
+                self.clipboard_msg = Some("Failed to copy IP".to_string());
             }
         }
     }
@@ -680,11 +715,11 @@ impl App {
                     let text = session.copy_lines(lines);
                     if copy_to_clipboard(&text) {
                         self.clipboard_msg = Some(
-                            if lines > 0 { format!("{} linhas copiadas!", lines) }
-                            else { "Tela copiada!".into() }
+                            if lines > 0 { format!("{} lines copied!", lines) }
+                            else { "Screen copied!".into() }
                         );
                     } else {
-                        self.clipboard_msg = Some("Falha: instale xclip (sudo apt install xclip)".into());
+                        self.clipboard_msg = Some("Failed: install xclip (sudo apt install xclip)".into());
                     }
                 }
             }
@@ -698,12 +733,18 @@ impl App {
             // :run CMD — executa comando no terminal
             "run" | "r" | "!" => {
                 if !arg.is_empty() {
-                    let shell_cmd = format!("{}\n", arg);
-                    let bytes = shell_cmd.into_bytes();
-                    if self.broadcast {
-                        self.write_input_all(&bytes);
-                    } else if let Some(session) = self.active_session_mut() {
-                        session.write_input(bytes);
+                    if Self::is_dangerous_command(arg) {
+                        self.danger_command = Some(arg.to_string());
+                        self.danger_broadcast = self.broadcast;
+                        self.mode = AppMode::ConfirmDanger;
+                    } else {
+                        let shell_cmd = format!("{}\n", arg);
+                        let bytes = shell_cmd.into_bytes();
+                        if self.broadcast {
+                            self.write_input_all(&bytes);
+                        } else if let Some(session) = self.active_session_mut() {
+                            session.write_input(bytes);
+                        }
                     }
                 }
             }
@@ -715,14 +756,20 @@ impl App {
             "close" | "q" => { self.close_active_tab(); }
             // :help — mostra help
             "help" | "h" | "?" => { self.show_help(); }
-            // Fallback: tenta executar como shell command
+            // Fallback: execute as shell command
             _ => {
-                let shell_cmd = format!("{}\n", input);
-                let bytes = shell_cmd.into_bytes();
-                if self.broadcast {
-                    self.write_input_all(&bytes);
-                } else if let Some(session) = self.active_session_mut() {
-                    session.write_input(bytes);
+                if Self::is_dangerous_command(&input) {
+                    self.danger_command = Some(input);
+                    self.danger_broadcast = self.broadcast;
+                    self.mode = AppMode::ConfirmDanger;
+                } else {
+                    let shell_cmd = format!("{}\n", input);
+                    let bytes = shell_cmd.into_bytes();
+                    if self.broadcast {
+                        self.write_input_all(&bytes);
+                    } else if let Some(session) = self.active_session_mut() {
+                        session.write_input(bytes);
+                    }
                 }
             }
         }
@@ -810,7 +857,7 @@ impl App {
             }
             Err(e) => {
                 // TODO: mostrar erro no status bar
-                eprintln!("Erro ao abrir terminal: {e}");
+                eprintln!("Error opening terminal: {e}");
             }
         }
     }
@@ -991,6 +1038,43 @@ impl App {
     }
 
 
+    // ─── Dangerous command detection ─────────────────────────────────
+
+    pub fn is_dangerous_command(cmd: &str) -> bool {
+        let lower = cmd.to_lowercase();
+        let patterns = [
+            "reboot", "shutdown", "poweroff", "halt",
+            "rm -rf", "rm -r /", "rmdir",
+            "mkfs", "dd if=", "fdisk",
+            "iptables -f", "iptables -x",
+            "systemctl stop", "systemctl disable",
+            "kill -9", "killall",
+            "chmod 777", "chmod -r",
+            "> /dev/sda", "> /dev/null",
+        ];
+        patterns.iter().any(|p| lower.contains(p))
+    }
+
+    pub fn confirm_danger(&mut self) {
+        if let Some(cmd) = self.danger_command.take() {
+            let shell_cmd = format!("{}\n", cmd);
+            let bytes = shell_cmd.into_bytes();
+            if self.danger_broadcast {
+                self.write_input_all(&bytes);
+            } else if let Some(session) = self.active_session_mut() {
+                session.write_input(bytes);
+            }
+        }
+        self.danger_broadcast = false;
+        self.mode = AppMode::Terminal;
+    }
+
+    pub fn cancel_danger(&mut self) {
+        self.danger_command = None;
+        self.danger_broadcast = false;
+        self.mode = AppMode::Terminal;
+    }
+
     // ─── Command Palette ──────────────────────────────────────────────
 
     pub fn open_palette(&mut self) {
@@ -1044,21 +1128,45 @@ impl App {
             });
         }
 
-        // Quick commands
+        // Quick commands from config
+        for snippet in &self.config.commands {
+            self.palette_items.push(PaletteItem {
+                label: format!("Run: {} [{}]", snippet.name, snippet.key),
+                description: snippet.command.clone(),
+                action: PaletteAction::RunCommand(snippet.command.clone()),
+            });
+        }
+
+        // Additional palette actions
         self.palette_items.push(PaletteItem {
-            label: "Run: htop".to_string(),
-            description: "Run htop in active terminal".to_string(),
-            action: PaletteAction::RunCommand("htop".to_string()),
+            label: "Copy: Screen (50 lines)".to_string(),
+            description: "Copy last 50 lines to clipboard".to_string(),
+            action: PaletteAction::CopyLines(50),
         });
         self.palette_items.push(PaletteItem {
-            label: "Run: docker ps".to_string(),
-            description: "Run docker ps -a in active terminal".to_string(),
-            action: PaletteAction::RunCommand("docker ps -a".to_string()),
+            label: "Copy: Last 100 lines".to_string(),
+            description: "Copy last 100 lines to clipboard".to_string(),
+            action: PaletteAction::CopyLines(100),
         });
         self.palette_items.push(PaletteItem {
-            label: "Run: journalctl -f".to_string(),
-            description: "Run journalctl -f --no-pager in active terminal".to_string(),
-            action: PaletteAction::RunCommand("journalctl -f --no-pager".to_string()),
+            label: "View: Server details".to_string(),
+            description: "Show details for current server".to_string(),
+            action: PaletteAction::ShowDetail,
+        });
+        self.palette_items.push(PaletteItem {
+            label: "View: Help (F1)".to_string(),
+            description: "Show keyboard shortcuts".to_string(),
+            action: PaletteAction::ShowHelp,
+        });
+        self.palette_items.push(PaletteItem {
+            label: "Session: Close tab (Ctrl+W)".to_string(),
+            description: "Close active terminal tab".to_string(),
+            action: PaletteAction::CloseTab,
+        });
+        self.palette_items.push(PaletteItem {
+            label: "Session: Reconnect".to_string(),
+            description: "Reconnect dead session".to_string(),
+            action: PaletteAction::Reconnect,
         });
 
         // Copy IP for all servers
@@ -1135,6 +1243,11 @@ impl App {
                 PaletteAction::Logout => PaletteActionData::Logout,
                 PaletteAction::CopyIp(ip) => PaletteActionData::CopyIp(ip.clone()),
                 PaletteAction::RunCommand(cmd) => PaletteActionData::RunCommand(cmd.clone()),
+                PaletteAction::ShowHelp => PaletteActionData::ShowHelp,
+                PaletteAction::CloseTab => PaletteActionData::CloseTab,
+                PaletteAction::CopyLines(n) => PaletteActionData::CopyLines(*n),
+                PaletteAction::Reconnect => PaletteActionData::Reconnect,
+                PaletteAction::ShowDetail => PaletteActionData::ShowDetail,
             };
 
             self.close_palette();
@@ -1165,21 +1278,49 @@ impl App {
                 }
                 PaletteActionData::CopyIp(ip) => {
                     if copy_to_clipboard(&ip) {
-                        self.clipboard_msg = Some(format!("IP copiado: {}", ip));
+                        self.clipboard_msg = Some(format!("IP copied: {}", ip));
                     } else {
-                        self.clipboard_msg = Some("Falha ao copiar IP".to_string());
+                        self.clipboard_msg = Some("Failed to copy IP".to_string());
                     }
                 }
                 PaletteActionData::RunCommand(cmd) => {
-                    let bytes = format!("{}\n", cmd).into_bytes();
-                    if self.broadcast {
-                        self.write_input_all(&bytes);
-                    } else if let Some(session) = self.active_session_mut() {
-                        session.write_input(bytes);
+                    if Self::is_dangerous_command(&cmd) {
+                        self.danger_command = Some(cmd);
+                        self.danger_broadcast = self.broadcast;
+                        self.mode = AppMode::ConfirmDanger;
+                    } else {
+                        let bytes = format!("{}\n", cmd).into_bytes();
+                        if self.broadcast {
+                            self.write_input_all(&bytes);
+                        } else if let Some(session) = self.active_session_mut() {
+                            session.write_input(bytes);
+                        }
+                        if self.active_tab.is_some() {
+                            self.mode = AppMode::Terminal;
+                        }
                     }
-                    if self.active_tab.is_some() {
-                        self.mode = AppMode::Terminal;
+                }
+                PaletteActionData::ShowHelp => {
+                    self.show_help();
+                }
+                PaletteActionData::CloseTab => {
+                    self.close_active_tab();
+                }
+                PaletteActionData::CopyLines(n) => {
+                    if let Some(session) = self.active_session() {
+                        let text = session.copy_lines(n);
+                        if copy_to_clipboard(&text) {
+                            self.clipboard_msg = Some(format!("{} lines copied!", n));
+                        } else {
+                            self.clipboard_msg = Some("Failed: install xclip (sudo apt install xclip)".into());
+                        }
                     }
+                }
+                PaletteActionData::Reconnect => {
+                    self.reconnect_active();
+                }
+                PaletteActionData::ShowDetail => {
+                    self.show_detail();
                 }
             }
         } else {
@@ -1349,40 +1490,39 @@ impl App {
         let is_dead = self.active_session().map(|s| s.is_dead()).unwrap_or(false);
 
         if is_dead {
-            items.push(ContextMenuItem { label: "Reconectar".into(), action: ContextAction::Reconnect });
-            items.push(ContextMenuItem { label: "Fechar tab".into(), action: ContextAction::Disconnect });
+            items.push(ContextMenuItem { label: "Reconnect".into(), action: ContextAction::Reconnect });
+            items.push(ContextMenuItem { label: "Close tab".into(), action: ContextAction::Disconnect });
         } else {
-            // Se tem texto selecionado, mostra opção de copiar seleção
             if self.mouse_select_start.is_some() && self.mouse_select_end.is_some() {
-                items.push(ContextMenuItem { label: "Copiar".into(), action: ContextAction::CopySelection });
+                items.push(ContextMenuItem { label: "Copy".into(), action: ContextAction::CopySelection });
             }
-            items.push(ContextMenuItem { label: "Copiar 50 linhas".into(), action: ContextAction::CopyLines(50) });
-            items.push(ContextMenuItem { label: "Copiar 100 linhas".into(), action: ContextAction::CopyLines(100) });
-            items.push(ContextMenuItem { label: "Fechar tab".into(), action: ContextAction::Disconnect });
+            items.push(ContextMenuItem { label: "Copy 50 lines".into(), action: ContextAction::CopyLines(50) });
+            items.push(ContextMenuItem { label: "Copy 100 lines".into(), action: ContextAction::CopyLines(100) });
+            items.push(ContextMenuItem { label: "Close tab".into(), action: ContextAction::Disconnect });
             if self.tabs.len() >= 2 {
                 items.push(ContextMenuItem { label: "Split".into(), action: ContextAction::Split });
             }
             items.push(ContextMenuItem { label: "Broadcast".into(), action: ContextAction::Broadcast });
         }
-        items.push(ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help });
+        items.push(ContextMenuItem { label: "Help".into(), action: ContextAction::Help });
 
         self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::Terminal });
     }
 
     pub fn open_context_menu_serverlist(&mut self, x: u16, y: u16) {
         let items = vec![
-            ContextMenuItem { label: "Conectar".into(), action: ContextAction::Connect },
-            ContextMenuItem { label: "Copiar IP".into(), action: ContextAction::CopyIp },
-            ContextMenuItem { label: "Detalhes".into(), action: ContextAction::ServerDetail },
-            ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help },
+            ContextMenuItem { label: "Connect".into(), action: ContextAction::Connect },
+            ContextMenuItem { label: "Copy IP".into(), action: ContextAction::CopyIp },
+            ContextMenuItem { label: "Details".into(), action: ContextAction::ServerDetail },
+            ContextMenuItem { label: "Help".into(), action: ContextAction::Help },
         ];
         self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::ServerList });
     }
 
     pub fn open_context_menu_sidebar(&mut self, x: u16, y: u16) {
         let items = vec![
-            ContextMenuItem { label: "Abrir".into(), action: ContextAction::Connect },
-            ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help },
+            ContextMenuItem { label: "Open".into(), action: ContextAction::Connect },
+            ContextMenuItem { label: "Help".into(), action: ContextAction::Help },
         ];
         self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::Sidebar });
     }
@@ -1415,7 +1555,7 @@ impl App {
                     if let Some(session) = self.active_session() {
                         let text = session.copy_selection(start, end);
                         if !text.trim().is_empty() && copy_to_clipboard(&text) {
-                            self.clipboard_msg = Some("Seleção copiada!".into());
+                            self.clipboard_msg = Some("Selection copied!".into());
                         }
                     }
                 }
@@ -1426,7 +1566,7 @@ impl App {
                 if let Some(session) = self.active_session() {
                     let text = session.copy_lines(n);
                     if copy_to_clipboard(&text) {
-                        self.clipboard_msg = Some(format!("{} linhas copiadas!", n));
+                        self.clipboard_msg = Some(format!("{} lines copied!", n));
                     }
                 }
             }
@@ -1498,6 +1638,11 @@ enum PaletteActionData {
     Logout,
     CopyIp(String),
     RunCommand(String),
+    ShowHelp,
+    CloseTab,
+    CopyLines(usize),
+    Reconnect,
+    ShowDetail,
 }
 
 // ── Clipboard helper ─────────────────────────────────────────────────────────
