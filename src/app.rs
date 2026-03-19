@@ -188,6 +188,9 @@ pub struct App {
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
+
+    // Gate API online status
+    pub gate_online: bool,
 }
 
 impl App {
@@ -239,6 +242,7 @@ impl App {
             mouse_select_end: None,
             #[cfg(feature = "api")]
             api_client: None,
+            gate_online: true,
         };
         app.rebuild_sidebar();
         app
@@ -1227,6 +1231,19 @@ impl App {
             self.refilter();
         }
         Ok(())
+    }
+
+    /// Verifica se a Gate API esta online e tenta renovar token se necessario
+    #[cfg(feature = "api")]
+    pub fn check_gate_status(&mut self) {
+        if let Some(ref mut client) = self.api_client {
+            let online = client.check_api_status();
+            self.gate_online = online;
+            // Se a API esta online, tenta renovar o token proativamente
+            if online {
+                client.auto_refresh();
+            }
+        }
     }
 
     pub fn is_api_mode(&self) -> bool {

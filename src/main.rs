@@ -161,6 +161,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_click: Option<(u16, u16, std::time::Instant)> = None;
     #[cfg(feature = "api")]
     let mut last_refresh = std::time::Instant::now();
+    #[cfg(feature = "api")]
+    let mut last_gate_check = std::time::Instant::now();
 
     loop {
         // Auto-reconnect: detect dead session and store reconnect info
@@ -170,9 +172,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Auto-refresh in background (every 5 minutes, only in Browse mode with API)
         #[cfg(feature = "api")]
-        if app.is_api_mode() && app.mode != AppMode::Terminal && last_refresh.elapsed() > std::time::Duration::from_secs(300) {
-            let _ = app.refresh_from_api();
-            last_refresh = std::time::Instant::now();
+        if app.is_api_mode() {
+            // Gate status ping every 60 seconds
+            if last_gate_check.elapsed() > std::time::Duration::from_secs(60) {
+                app.check_gate_status();
+                last_gate_check = std::time::Instant::now();
+            }
+            // Full refresh every 5 minutes (non-terminal mode)
+            if app.mode != AppMode::Terminal && last_refresh.elapsed() > std::time::Duration::from_secs(300) {
+                app.check_gate_status();
+                let _ = app.refresh_from_api();
+                last_refresh = std::time::Instant::now();
+                last_gate_check = std::time::Instant::now();
+            }
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
 

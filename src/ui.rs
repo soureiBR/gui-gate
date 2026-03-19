@@ -184,19 +184,30 @@ fn draw_titlebar(frame: &mut Frame, area: Rect, app: &App) {
 
     let server_count: usize = app.config.categories.iter().map(|c| c.servers.len()).sum();
 
-    let title = Line::from(vec![
-        Span::styled(" ◆ ", Style::default().fg(MAUVE).add_modifier(Modifier::BOLD)),
+    let mut title_spans = vec![
+        Span::styled(" \u{25c6} ", Style::default().fg(MAUVE).add_modifier(Modifier::BOLD)),
         Span::styled(
             format!("SoureiGate v{}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" │ ", Style::default().fg(DIMMED)),
+        Span::styled(" \u{2502} ", Style::default().fg(DIMMED)),
         Span::styled(cat_name, Style::default().fg(PEACH)),
         Span::styled(
             format!("  {} servidores", server_count),
             Style::default().fg(DIMMED),
         ),
-    ]);
+    ];
+
+    if app.is_api_mode() {
+        let (gate_label, gate_color) = if app.gate_online {
+            (" \u{25cf} GATE ", GREEN)
+        } else {
+            (" \u{25cf} GATE ", RED)
+        };
+        title_spans.push(Span::styled(gate_label, Style::default().fg(gate_color).add_modifier(Modifier::BOLD)));
+    }
+
+    let title = Line::from(title_spans);
 
     frame.render_widget(
         Paragraph::new(title).style(Style::default().bg(HEADER_BG)),

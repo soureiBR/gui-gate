@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Category, Server};
 
@@ -27,10 +27,18 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Dados da sessão persistidos em JSON
+#[derive(Serialize, Deserialize)]
+struct SessionData {
+    access_token: String,
+    refresh_token: String,
+}
+
 /// Client da Gate API — JWT na RAM, cache em ~/.config/soureigate/.session
 pub struct ApiClient {
     base_url: String,
     jwt: String,
+    refresh_token: String,
     http: reqwest::blocking::Client,
 }
 
@@ -40,27 +48,45 @@ fn session_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("soureigate").join(".session"))
 }
 
-fn save_session(jwt: &str) {
+fn save_session(access: &str, refresh: &str) {
     if let Some(path) = session_path() {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        if std::fs::write(&path, jwt).is_ok() {
-            // chmod 600 — só o dono lê/escreve
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+        let data = SessionData {
+            access_token: access.to_string(),
+            refresh_token: refresh.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&data) {
+            if std::fs::write(&path, json).is_ok() {
+                // chmod 600 — so o dono le/escreve
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+                }
             }
         }
     }
 }
 
-fn load_session() -> Option<String> {
+/// Carrega sessao salva. Compativel com formato antigo (JWT puro) e novo (JSON).
+fn load_session() -> Option<SessionData> {
     let path = session_path()?;
-    let jwt = std::fs::read_to_string(&path).ok()?;
-    let jwt = jwt.trim().to_string();
-    if jwt.is_empty() { None } else { Some(jwt) }
+    let content = std::fs::read_to_string(&path).ok()?;
+    let content = content.trim().to_string();
+    if content.is_empty() { return None; }
+
+    // Tenta parsear como JSON (formato novo)
+    if let Ok(data) = serde_json::from_str::<SessionData>(&content) {
+        return Some(data);
+    }
+
+    // Fallback: formato antigo (JWT puro, sem refresh token)
+    Some(SessionData {
+        access_token: content,
+        refresh_token: String::new(),
+    })
 }
 
 fn clear_session() {
@@ -148,6 +174,33 @@ fn val_to_string(v: &serde_json::Value) -> String {
     }
 }
 
+// ── Refresh token ────────────────────────────────────────────────────────────
+
+fn try_refresh(http: &reqwest::blocking::Client, base_url: &str, refresh_token: &str) -> Result<SessionData, Box<dyn std::error::Error>> {
+    let url = format!("{}/api/auth/refresh", base_url);
+    let body = serde_json::json!({ "refresh_token": refresh_token });
+    let resp = http.post(&url)
+        .json(&body)
+        .send()?;
+
+    if !resp.status().is_success() {
+        return Err("Refresh failed".into());
+    }
+
+    let json: serde_json::Value = resp.json()?;
+    let access = json.get("access_token")
+        .or_else(|| json.get("token"))
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in refresh response")?
+        .to_string();
+    let refresh = json.get("refresh_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No refresh_token in refresh response")?
+        .to_string();
+
+    Ok(SessionData { access_token: access, refresh_token: refresh })
+}
+
 impl ApiClient {
     fn build_http() -> Result<reqwest::blocking::Client, reqwest::Error> {
         reqwest::blocking::Client::builder()
@@ -156,45 +209,64 @@ impl ApiClient {
             .build()
     }
 
-    /// Tenta retomar sessão salva. Se expirada, faz passkey login.
+    /// Tenta retomar sessao salva. Se expirada, tenta refresh. Se falhar, faz passkey login.
     pub fn login(base_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let http = Self::build_http()?;
 
-        // Testa se a API tá acessível
+        // Testa se a API ta acessivel
         let status_url = format!("{}/api/status", base_url);
         http.get(&status_url).send().map_err(|e| {
-            format!("API inacessível em {}: {}", base_url, e)
+            format!("API inacessivel em {}: {}", base_url, e)
         })?;
 
-        // Tenta reusar sessão salva
-        if let Some(cached_jwt) = load_session() {
+        // Tenta reusar sessao salva
+        if let Some(session) = load_session() {
+            // Tenta access token
             let test_url = format!("{}/api/hosts", base_url);
             let resp = http.get(&test_url)
-                .header("Authorization", format!("Bearer {}", cached_jwt))
+                .header("Authorization", format!("Bearer {}", session.access_token))
                 .send();
 
             if let Ok(r) = resp {
                 if r.status().is_success() {
-                    eprintln!("✓ Sessão anterior válida, pulando login\n");
+                    eprintln!("\u{2713} Sessao valida\n");
                     return Ok(Self {
                         base_url: base_url.to_string(),
-                        jwt: cached_jwt,
+                        jwt: session.access_token,
+                        refresh_token: session.refresh_token,
                         http,
                     });
                 }
             }
-            // JWT expirado — limpa e faz login novo
+
+            // Access token expirado -> tenta refresh
+            if !session.refresh_token.is_empty() {
+                eprintln!("Token expirado, renovando...");
+                if let Ok(new_session) = try_refresh(&http, base_url, &session.refresh_token) {
+                    save_session(&new_session.access_token, &new_session.refresh_token);
+                    eprintln!("\u{2713} Token renovado\n");
+                    return Ok(Self {
+                        base_url: base_url.to_string(),
+                        jwt: new_session.access_token,
+                        refresh_token: new_session.refresh_token,
+                        http,
+                    });
+                }
+            }
+
+            // Refresh tambem falhou
             clear_session();
-            eprintln!("Sessão expirada, autenticando novamente...\n");
+            eprintln!("Sessao expirada, autenticando novamente...\n");
         }
 
         // Passkey login via browser
-        let jwt = passkey_auth(base_url)?;
-        save_session(&jwt);
+        let (jwt, refresh) = passkey_auth(base_url)?;
+        save_session(&jwt, &refresh);
 
         Ok(Self {
             base_url: base_url.to_string(),
             jwt,
+            refresh_token: refresh,
             http,
         })
     }
@@ -319,12 +391,35 @@ impl ApiClient {
         self.fetch_categories()
     }
 
+    /// Tenta renovar o access token usando o refresh token.
+    /// Retorna true se conseguiu, false se falhou.
+    pub fn auto_refresh(&mut self) -> bool {
+        if let Ok(new_session) = try_refresh(&self.http, &self.base_url, &self.refresh_token) {
+            save_session(&new_session.access_token, &new_session.refresh_token);
+            self.jwt = new_session.access_token;
+            self.refresh_token = new_session.refresh_token;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Verifica se a API esta online (ping /api/status)
+    pub fn check_api_status(&self) -> bool {
+        let url = format!("{}/api/status", self.base_url);
+        self.http.get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
 }
 
 // ── Passkey auth via browser ──────────────────────────────────────────────────
 
-fn passkey_auth(base_url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Abre um mini HTTP server em porta aleatória
+fn passkey_auth(base_url: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    // Abre um mini HTTP server em porta aleatoria
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
 
@@ -333,29 +428,29 @@ fn passkey_auth(base_url: &str) -> Result<String, Box<dyn std::error::Error>> {
 
     // Abre o browser
     let auth_url = format!("{}/cli-auth.html?port={}", base_url, port);
-    eprintln!("🔐 Abrindo browser para autenticação...");
+    eprintln!("Abrindo browser para autenticacao...");
     eprintln!("   URL: {}", auth_url);
     eprintln!("   Aguardando passkey...\n");
 
     open::that(&auth_url).map_err(|e| {
-        format!("Não foi possível abrir o browser: {}. Acesse manualmente: {}", e, auth_url)
+        format!("Nao foi possivel abrir o browser: {}. Acesse manualmente: {}", e, auth_url)
     })?;
 
     // Espera o callback com timeout
     listener.set_nonblocking(false)?;
-    let jwt = wait_for_callback(listener)?;
+    let (jwt, refresh) = wait_for_callback(listener)?;
 
-    eprintln!("✓ Autenticado com sucesso!\n");
-    Ok(jwt)
+    eprintln!("\u{2713} Autenticado com sucesso!\n");
+    Ok((jwt, refresh))
 }
 
-fn wait_for_callback(listener: TcpListener) -> Result<String, Box<dyn std::error::Error>> {
+fn wait_for_callback(listener: TcpListener) -> Result<(String, String), Box<dyn std::error::Error>> {
     // Timeout de 120s
     listener
         .set_nonblocking(false)
         .ok();
 
-    // Aceita conexões até receber o JWT
+    // Aceita conexoes ate receber o JWT
     loop {
         let (mut stream, _) = listener.accept()?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -380,14 +475,14 @@ fn wait_for_callback(listener: TcpListener) -> Result<String, Box<dyn std::error
             continue;
         }
 
-        // Procura jwt= no query string do GET
-        if let Some(jwt) = extract_jwt_from_request(first_line) {
+        // Procura jwt= e refresh_token= no query string do GET
+        if let Some((jwt, refresh)) = extract_tokens_from_request(first_line) {
             let ok_response = "HTTP/1.1 200 OK\r\n\
                 Access-Control-Allow-Origin: *\r\n\
                 Content-Type: text/plain\r\n\
                 Content-Length: 2\r\n\r\nOK";
             stream.write_all(ok_response.as_bytes()).ok();
-            return Ok(jwt);
+            return Ok((jwt, refresh));
         }
 
         // Request sem JWT — responde 400
@@ -399,21 +494,28 @@ fn wait_for_callback(listener: TcpListener) -> Result<String, Box<dyn std::error
     }
 }
 
-fn extract_jwt_from_request(request_line: &str) -> Option<String> {
-    // GET /callback?jwt=xxx HTTP/1.1
+/// Extrai jwt e refresh_token do query string do callback.
+/// Retorna (access_token, refresh_token). refresh_token pode ser vazio se nao enviado.
+fn extract_tokens_from_request(request_line: &str) -> Option<(String, String)> {
+    // GET /callback?jwt=xxx&refresh_token=yyy HTTP/1.1
     let path = request_line.split_whitespace().nth(1)?;
     let query = path.split('?').nth(1)?;
 
+    let mut jwt = None;
+    let mut refresh = String::new();
+
     for param in query.split('&') {
         let mut kv = param.splitn(2, '=');
-        if kv.next() == Some("jwt") {
-            let token = kv.next()?.to_string();
-            if !token.is_empty() {
-                return Some(token);
-            }
+        let key = kv.next()?;
+        let val = kv.next().unwrap_or("");
+        match key {
+            "jwt" if !val.is_empty() => jwt = Some(val.to_string()),
+            "refresh_token" if !val.is_empty() => refresh = val.to_string(),
+            _ => {}
         }
     }
-    None
+
+    jwt.map(|t| (t, refresh))
 }
 
 // ── Categorização de hosts ────────────────────────────────────────────────────
