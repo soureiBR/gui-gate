@@ -517,7 +517,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if app::copy_to_clipboard(&text) {
                                         app.clipboard_msg = Some("50 linhas copiadas!".into());
                                     } else {
-                                        app.clipboard_msg = Some("Falha ao copiar".into());
+                                        app.clipboard_msg = Some("Falha: instale xclip (sudo apt install xclip)".into());
                                     }
                                 }
                                 continue;

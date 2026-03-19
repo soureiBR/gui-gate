@@ -684,7 +684,7 @@ impl App {
                             else { "Tela copiada!".into() }
                         );
                     } else {
-                        self.clipboard_msg = Some("Falha ao copiar".into());
+                        self.clipboard_msg = Some("Falha: instale xclip (sudo apt install xclip)".into());
                     }
                 }
             }
@@ -1502,18 +1502,19 @@ enum PaletteActionData {
 
 // ── Clipboard helper ─────────────────────────────────────────────────────────
 
+/// Tenta copiar pro clipboard. Retorna (sucesso, mensagem_erro)
 pub fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
     #[cfg(target_os = "linux")]
     {
-        // Try xclip, then xsel, then wl-copy, then clip.exe (WSL)
         let commands: &[(&str, &[&str])] = &[
             ("xclip", &["-selection", "clipboard"]),
             ("xsel", &["--clipboard", "--input"]),
             ("wl-copy", &[]),
-            ("clip.exe", &[]),
+            ("clip.exe", &[]),  // WSL
+            ("xdg-clipboard", &["copy"]),
         ];
         for &(cmd, args) in commands {
             if let Ok(mut child) = Command::new(cmd)
