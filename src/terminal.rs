@@ -148,4 +148,88 @@ impl TerminalSession {
         let mut term = self.term.lock();
         term.scroll_display(Scroll::Bottom);
     }
+
+    /// Extrai texto por range de coordenadas (col, row) relativas ao viewport
+    pub fn copy_selection(&self, start: (u16, u16), end: (u16, u16)) -> String {
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::grid::Dimensions;
+
+        let term = self.term.lock();
+        let grid = term.grid();
+        let columns = term.columns();
+        let display_offset = grid.display_offset() as i32;
+
+        // Normaliza start/end pra que start venha antes
+        let (start, end) = if start.1 < end.1 || (start.1 == end.1 && start.0 <= end.0) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+
+        let mut result = String::new();
+
+        for row in start.1..=end.1 {
+            let line_idx = Line(row as i32 - display_offset);
+            let col_start = if row == start.1 { start.0 as usize } else { 0 };
+            let col_end = if row == end.1 { end.0 as usize } else { columns.saturating_sub(1) };
+
+            let mut line = String::new();
+            for col in col_start..=col_end.min(columns.saturating_sub(1)) {
+                let cell = &grid[line_idx][Column(col)];
+                if cell.c != '\0' {
+                    line.push(cell.c);
+                }
+            }
+            result.push_str(line.trim_end());
+            if row < end.1 {
+                result.push('\n');
+            }
+        }
+
+        result
+    }
+
+    /// Extrai as últimas N linhas de texto visível do terminal
+    pub fn copy_lines(&self, count: usize) -> String {
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::grid::Dimensions;
+
+        let term = self.term.lock();
+        let grid = term.grid();
+        let screen_lines = term.screen_lines();
+        let columns = term.columns();
+
+        let start = if count >= screen_lines { 0 } else { screen_lines - count };
+        let mut result = String::new();
+
+        for row in start..screen_lines {
+            let mut line = String::new();
+            for col in 0..columns {
+                let cell = &grid[Line(row as i32)][Column(col)];
+                let c = cell.c;
+                if c != '\0' {
+                    line.push(c);
+                }
+            }
+            // Remove trailing whitespace
+            let trimmed = line.trim_end();
+            if !trimmed.is_empty() || row < screen_lines - 1 {
+                result.push_str(trimmed);
+                result.push('\n');
+            }
+        }
+
+        // Remove trailing empty lines
+        while result.ends_with("\n\n") {
+            result.pop();
+        }
+
+        result
+    }
+
+    /// Extrai TODO o texto visível do terminal
+    pub fn copy_screen(&self) -> String {
+        use alacritty_terminal::grid::Dimensions;
+        self.copy_lines(self.term.lock().screen_lines())
+    }
 }

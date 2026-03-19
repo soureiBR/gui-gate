@@ -265,12 +265,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     MouseEventKind::ScrollUp => {
-                        if in_sidebar { app.mouse_scroll_sidebar(true); }
-                        else if in_serverlist { app.mouse_scroll_serverlist(true); }
+                        if app.mode == AppMode::Terminal && !in_sidebar {
+                            // Scroll up no terminal
+                            if let Some(session) = app.active_session_mut() {
+                                session.scroll_up(3);
+                            }
+                        } else if in_sidebar {
+                            app.mouse_scroll_sidebar(true);
+                        } else if in_serverlist {
+                            app.mouse_scroll_serverlist(true);
+                        }
                     }
                     MouseEventKind::ScrollDown => {
-                        if in_sidebar { app.mouse_scroll_sidebar(false); }
-                        else if in_serverlist { app.mouse_scroll_serverlist(false); }
+                        if app.mode == AppMode::Terminal && !in_sidebar {
+                            // Scroll down no terminal
+                            if let Some(session) = app.active_session_mut() {
+                                session.scroll_down(3);
+                            }
+                        } else if in_sidebar {
+                            app.mouse_scroll_sidebar(false);
+                        } else if in_serverlist {
+                            app.mouse_scroll_serverlist(false);
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        // Mouse drag: seleção de texto no terminal
+                        if app.mode == AppMode::Terminal && !in_sidebar {
+                            let (lx, ly, _, _) = app.mouse_serverlist_area;
+                            let rel_col = mx.saturating_sub(lx + 1); // +1 pela borda
+                            let rel_row = my.saturating_sub(ly + 1);
+
+                            if !app.mouse_selecting {
+                                app.mouse_selecting = true;
+                                app.mouse_select_start = Some((rel_col, rel_row));
+                            }
+                            app.mouse_select_end = Some((rel_col, rel_row));
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        // Mouse up: finaliza seleção e copia
+                        if app.mouse_selecting {
+                            app.mouse_selecting = false;
+                            if let (Some(start), Some(end)) = (app.mouse_select_start, app.mouse_select_end) {
+                                if start != end {
+                                    if let Some(session) = app.active_session() {
+                                        let text = session.copy_selection(start, end);
+                                        if !text.trim().is_empty() {
+                                            if app::copy_to_clipboard(&text) {
+                                                app.clipboard_msg = Some("Seleção copiada!".into());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            app.mouse_select_start = None;
+                            app.mouse_select_end = None;
+                        }
                     }
                     _ => {}
                 }
@@ -308,18 +358,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
 
-                        // Shift+PageUp/Down for terminal scrollback
+                        // Scroll: Shift+PageUp/Down OU Shift+Up/Down
                         if shift {
                             match key.code {
-                                KeyCode::PageUp => {
+                                KeyCode::PageUp | KeyCode::Up => {
                                     if let Some(session) = app.active_session_mut() {
-                                        session.scroll_up(10);
+                                        session.scroll_up(if key.code == KeyCode::PageUp { 10 } else { 3 });
                                     }
                                     continue;
                                 }
-                                KeyCode::PageDown => {
+                                KeyCode::PageDown | KeyCode::Down => {
                                     if let Some(session) = app.active_session_mut() {
-                                        session.scroll_down(10);
+                                        session.scroll_down(if key.code == KeyCode::PageDown { 10 } else { 3 });
                                     }
                                     continue;
                                 }
@@ -402,6 +452,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 continue;
                             }
+                            KeyCode::F(9) => {
+                                // Scroll up 10 lines
+                                if let Some(session) = app.active_session_mut() {
+                                    session.scroll_up(10);
+                                }
+                                continue;
+                            }
+                            KeyCode::F(10) => {
+                                // Scroll down 10 lines
+                                if let Some(session) = app.active_session_mut() {
+                                    session.scroll_down(10);
+                                }
+                                continue;
+                            }
+                            KeyCode::F(11) => {
+                                // Copy toda a tela visível pro clipboard
+                                if let Some(session) = app.active_session() {
+                                    let text = session.copy_screen();
+                                    if app::copy_to_clipboard(&text) {
+                                        app.clipboard_msg = Some("Tela copiada!".into());
+                                    } else {
+                                        app.clipboard_msg = Some("Falha ao copiar".into());
+                                    }
+                                }
+                                continue;
+                            }
+                            KeyCode::F(12) => {
+                                // Copy últimas 50 linhas pro clipboard
+                                if let Some(session) = app.active_session() {
+                                    let text = session.copy_lines(50);
+                                    if app::copy_to_clipboard(&text) {
+                                        app.clipboard_msg = Some("50 linhas copiadas!".into());
+                                    } else {
+                                        app.clipboard_msg = Some("Falha ao copiar".into());
+                                    }
+                                }
+                                continue;
+                            }
                             _ => {}
                         }
 
@@ -413,6 +501,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 KeyCode::Char('p') => {
                                     app.open_palette();
+                                    continue;
+                                }
+                                KeyCode::Char('x') => {
+                                    app.open_command_input();
                                     continue;
                                 }
                                 KeyCode::Char('w') => {
@@ -448,6 +540,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+
+                    AppMode::CommandInput => match key.code {
+                        KeyCode::Esc => app.cancel_command_input(),
+                        KeyCode::Enter => app.execute_command_input(),
+                        KeyCode::Backspace => app.command_input_backspace(),
+                        KeyCode::Char(c) => app.command_input_push(c),
+                        _ => {}
+                    },
 
                     AppMode::Help => match key.code {
                         KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') => app.close_help(),
@@ -539,7 +639,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.go_back_nav()
                             }
                             KeyCode::Char(' ') => app.toggle_select(),
-                            KeyCode::Char('/') => app.enter_search(),
                             KeyCode::Char('i') => app.show_detail(),
                             KeyCode::Char('c') => app.copy_ip(),
                             KeyCode::Tab => app.toggle_sidebar_focus(),

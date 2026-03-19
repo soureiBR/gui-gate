@@ -52,6 +52,8 @@ pub enum AppMode {
     Palette,
     /// Help screen
     Help,
+    /// Command input (mini prompt no terminal)
+    CommandInput,
 }
 
 pub struct PaletteItem {
@@ -136,6 +138,14 @@ pub struct App {
     pub help_scroll: usize,
     pub prev_mode: AppMode,
 
+    // Command input
+    pub command_input: String,
+
+    // Mouse text selection
+    pub mouse_selecting: bool,
+    pub mouse_select_start: Option<(u16, u16)>,  // (col, row) relativo ao terminal
+    pub mouse_select_end: Option<(u16, u16)>,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -183,6 +193,10 @@ impl App {
             reconnect_server: None,
             help_scroll: 0,
             prev_mode: AppMode::Browse,
+            command_input: String::new(),
+            mouse_selecting: false,
+            mouse_select_start: None,
+            mouse_select_end: None,
             #[cfg(feature = "api")]
             api_client: None,
         };
@@ -395,6 +409,9 @@ impl App {
             AppMode::Help => {
                 self.close_help();
             }
+            AppMode::CommandInput => {
+                self.cancel_command_input();
+            }
         }
     }
 
@@ -583,16 +600,100 @@ impl App {
         self.mode = self.prev_mode;
     }
 
-    // ─── Search ─────────────────────────────────────────────────────
+    // ─── Command input ──────────────────────────────────────────────
 
-    pub fn enter_search(&mut self) {
-        self.mode = AppMode::Search;
-        self.search_query.clear();
-        self.is_global_search = true;
-        self.global_results.clear();
-        self.global_index = 0;
-        self.refilter();
+    pub fn open_command_input(&mut self) {
+        self.command_input.clear();
+        self.mode = AppMode::CommandInput;
     }
+
+    pub fn command_input_push(&mut self, c: char) {
+        self.command_input.push(c);
+    }
+
+    pub fn command_input_backspace(&mut self) {
+        self.command_input.pop();
+    }
+
+    pub fn execute_command_input(&mut self) {
+        let input = self.command_input.trim().to_string();
+        self.command_input.clear();
+        self.mode = AppMode::Terminal;
+
+        if input.is_empty() {
+            return;
+        }
+
+        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let cmd = parts[0].to_lowercase();
+        let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+        match cmd.as_str() {
+            // :copy N — copia últimas N linhas (default: tela inteira)
+            "copy" | "c" | "cp" => {
+                let lines: usize = arg.parse().unwrap_or(0);
+                if let Some(session) = self.active_session() {
+                    let text = if lines > 0 {
+                        session.copy_lines(lines)
+                    } else {
+                        session.copy_screen()
+                    };
+                    if copy_to_clipboard(&text) {
+                        self.clipboard_msg = Some(
+                            if lines > 0 { format!("{} linhas copiadas!", lines) }
+                            else { "Tela copiada!".into() }
+                        );
+                    } else {
+                        self.clipboard_msg = Some("Falha ao copiar".into());
+                    }
+                }
+            }
+            // :scroll N — scroll up N linhas
+            "scroll" | "s" => {
+                let lines: usize = arg.parse().unwrap_or(10);
+                if let Some(session) = self.active_session_mut() {
+                    session.scroll_up(lines);
+                }
+            }
+            // :run CMD — executa comando no terminal
+            "run" | "r" | "!" => {
+                if !arg.is_empty() {
+                    let shell_cmd = format!("{}\n", arg);
+                    let bytes = shell_cmd.into_bytes();
+                    if self.broadcast {
+                        self.write_input_all(&bytes);
+                    } else if let Some(session) = self.active_session_mut() {
+                        session.write_input(bytes);
+                    }
+                }
+            }
+            // :split — toggle split
+            "split" | "sp" => { self.toggle_split(); }
+            // :broadcast — toggle broadcast
+            "broadcast" | "bc" => { self.toggle_broadcast(); }
+            // :close — fecha tab
+            "close" | "q" => { self.close_active_tab(); }
+            // :help — mostra help
+            "help" | "h" | "?" => { self.show_help(); }
+            // Fallback: tenta executar como shell command
+            _ => {
+                let shell_cmd = format!("{}\n", input);
+                let bytes = shell_cmd.into_bytes();
+                if self.broadcast {
+                    self.write_input_all(&bytes);
+                } else if let Some(session) = self.active_session_mut() {
+                    session.write_input(bytes);
+                }
+            }
+        }
+    }
+
+    pub fn cancel_command_input(&mut self) {
+        self.command_input.clear();
+        self.mode = AppMode::Terminal;
+    }
+
+    // ─── Search ─────────────────────────────────────────────────────
 
     pub fn search_push(&mut self, c: char) {
         self.search_query.push(c);
@@ -1219,7 +1320,7 @@ enum PaletteActionData {
 
 // ── Clipboard helper ─────────────────────────────────────────────────────────
 
-fn copy_to_clipboard(text: &str) -> bool {
+pub fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     use std::process::{Command, Stdio};
 

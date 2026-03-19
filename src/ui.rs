@@ -219,7 +219,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
     draw_sidebar(frame, chunks[0], app);
 
     match app.mode {
-        AppMode::Terminal => {
+        AppMode::Terminal | AppMode::CommandInput => {
             let has_split = app.split.is_some();
             let active_idx = app.active_tab;
 
@@ -747,7 +747,15 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     if session.is_dead() {
         draw_dead_session_overlay(frame, inner, &session.name);
     } else {
-        frame.render_widget(TermWidget { session }, inner);
+        let selection = if app.mouse_selecting {
+            match (app.mouse_select_start, app.mouse_select_end) {
+                (Some(s), Some(e)) => Some((s, e)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        frame.render_widget(TermWidget { session, selection }, inner);
     }
 }
 
@@ -818,6 +826,7 @@ fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &mut App) {
 
 struct TermWidget<'a> {
     session: &'a TerminalSession,
+    selection: Option<((u16, u16), (u16, u16))>, // (start, end) relativo ao terminal
 }
 
 impl Widget for TermWidget<'_> {
@@ -830,12 +839,14 @@ impl Widget for TermWidget<'_> {
         let grid = term.grid();
         let screen_lines = term.screen_lines();
         let columns = term.columns();
+        let display_offset = grid.display_offset() as i32;
 
         for row in 0..area.height as usize {
             if row >= screen_lines {
                 break;
             }
-            let line_idx = TermLine(row as i32);
+            // Ajusta pelo scroll offset — valores negativos acessam o histórico
+            let line_idx = TermLine(row as i32 - display_offset);
 
             for col in 0..area.width as usize {
                 if col >= columns {
@@ -881,6 +892,34 @@ impl Widget for TermWidget<'_> {
                 // Não renderiza wide char spacers (espaço vazio de caractere largo)
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
+                }
+
+                // Highlight de seleção do mouse
+                if let Some((sel_start, sel_end)) = self.selection {
+                    let (s, e) = if sel_start.1 < sel_end.1 || (sel_start.1 == sel_end.1 && sel_start.0 <= sel_end.0) {
+                        (sel_start, sel_end)
+                    } else {
+                        (sel_end, sel_start)
+                    };
+                    let r = row as u16;
+                    let c_col = col as u16;
+                    let in_selection = if r > s.1 && r < e.1 {
+                        true // linha inteira entre start e end
+                    } else if r == s.1 && r == e.1 {
+                        c_col >= s.0 && c_col <= e.0 // mesma linha
+                    } else if r == s.1 {
+                        c_col >= s.0 // primeira linha, da coluna start em diante
+                    } else if r == e.1 {
+                        c_col <= e.0 // última linha, até coluna end
+                    } else {
+                        false
+                    };
+
+                    if in_selection {
+                        style = Style::default()
+                            .fg(Color::Rgb(17, 17, 27))
+                            .bg(ACCENT);
+                    }
                 }
 
                 let c = if cell.c == '\0' { ' ' } else { cell.c };
@@ -999,8 +1038,7 @@ fn draw_split_pane(
     if session.is_dead() {
         draw_dead_session_overlay(frame, inner, &session.name);
     } else {
-        let term_widget = TermWidget { session };
-        frame.render_widget(term_widget, inner);
+        frame.render_widget(TermWidget { session, selection: None }, inner);
     }
 }
 
@@ -1306,7 +1344,6 @@ fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
         help_entry("Enter / l", "Select / Connect"),
         help_entry("Esc / h", "Go back"),
         help_entry("Tab", "Switch panel focus"),
-        help_entry("/", "Global search"),
         help_entry("g / G", "Jump to top / bottom"),
         Line::from(""),
         section("Server Actions"),
@@ -1325,7 +1362,12 @@ fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
         help_entry("F6", "Run: htop"),
         help_entry("F7", "Run: docker ps"),
         help_entry("F8", "Run: journalctl -f"),
-        help_entry("Shift+PgUp/PgDn", "Scroll terminal history"),
+        help_entry("Ctrl+X", "Linha de comando (:copy :scroll :run)"),
+        help_entry("Mouse drag", "Selecionar e copiar texto"),
+        help_entry("F9 / F10", "Scroll up/down 10 linhas"),
+        help_entry("Shift+Up/Down", "Scroll up/down 3 linhas"),
+        help_entry("F11", "Copiar tela pro clipboard"),
+        help_entry("F12", "Copiar ultimas 50 linhas"),
         Line::from(""),
         section("General"),
         help_entry("F1", "This help"),
@@ -1478,6 +1520,21 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             key_hint("↑↓"),
             Span::raw(" navegar "),
         ]),
+        AppMode::CommandInput => Line::from(vec![
+            Span::styled(
+                " CMD ",
+                Style::default()
+                    .fg(Color::Rgb(17, 17, 27))
+                    .bg(TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" :{}", app.command_input),
+                Style::default().fg(TEXT),
+            ),
+            Span::styled("▎ ", Style::default().fg(ACCENT)),
+            Span::styled("  copy N | scroll N | run CMD | split | help", Style::default().fg(DIMMED)),
+        ]),
         AppMode::Help => Line::from(vec![
             Span::styled(
                 " HELP ",
@@ -1508,8 +1565,6 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 hints.extend([
                     key_hint("q"),
                     Span::raw(" Sair "),
-                    key_hint("/"),
-                    Span::raw(" Buscar "),
                     key_hint("Enter"),
                     Span::raw(" Conectar "),
                     key_hint("Space"),
