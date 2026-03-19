@@ -1423,14 +1423,14 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 " SEARCH ",
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
+                    .fg(Color::Rgb(17, 17, 27))
+                    .bg(YELLOW)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(" {} ", app.search_query)),
+            Span::styled(format!(" {} ", app.search_query), Style::default().fg(TEXT)),
             Span::styled(
-                "(Enter confirma, Esc cancela)",
-                Style::default().fg(Color::DarkGray),
+                "  Enter confirma, Esc cancela",
+                Style::default().fg(DIMMED),
             ),
         ]),
         AppMode::Terminal => {
@@ -1442,8 +1442,8 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(
                     " TERMINAL ",
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
+                        .fg(Color::Rgb(17, 17, 27))
+                        .bg(ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(" {} ", tab_info)),
@@ -1500,7 +1500,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 " DETAIL ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(Color::Rgb(17, 17, 27))
                     .bg(MAUVE)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -1514,7 +1514,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 " PALETTE ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(Color::Rgb(17, 17, 27))
                     .bg(MAUVE)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -1545,7 +1545,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 " HELP ",
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(Color::Rgb(17, 17, 27))
                     .bg(MAUVE)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -1596,7 +1596,7 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             if !app.tabs.is_empty() {
                 hints.push(Span::styled(
                     format!(" [{}] sessões", app.tabs.len()),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(ACCENT),
                 ));
             }
             Line::from(hints)
