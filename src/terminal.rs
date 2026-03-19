@@ -140,6 +140,27 @@ impl TerminalSession {
     }
 
     /// Lê a linha atual onde o cursor está (pra detectar comandos perigosos)
+    /// Verifica se o terminal já recebeu algum output
+    pub fn has_output(&self) -> bool {
+        use alacritty_terminal::index::Column;
+        use alacritty_terminal::grid::Dimensions;
+
+        let term = self.term.lock();
+        let grid = term.grid();
+        let columns = term.columns();
+
+        // Checa as primeiras 3 linhas — se qualquer célula tem conteúdo, já tem output
+        for row in 0..3i32 {
+            for col in 0..columns {
+                let cell = &grid[alacritty_terminal::index::Line(row)][Column(col)];
+                if cell.c != ' ' && cell.c != '\0' {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn current_line(&self) -> String {
         use alacritty_terminal::index::Column;
         use alacritty_terminal::grid::Dimensions;

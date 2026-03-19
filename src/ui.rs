@@ -768,6 +768,8 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     let session = &app.tabs[tab_idx];
     if session.is_dead() {
         draw_dead_session_overlay(frame, inner, &session.name);
+    } else if !session.has_output() {
+        draw_connecting_overlay(frame, inner, session);
     } else {
         // Mostra seleção se tem start+end (durante ou depois do drag)
         let selection = match (app.mouse_select_start, app.mouse_select_end) {
@@ -1063,6 +1065,8 @@ fn draw_split_pane(
 
     if session.is_dead() {
         draw_dead_session_overlay(frame, chunks[1], &session.name);
+    } else if !session.has_output() {
+        draw_connecting_overlay(frame, chunks[1], session);
     } else {
         frame.render_widget(TermWidget { session, selection: None }, chunks[1]);
     }
@@ -1124,6 +1128,45 @@ fn draw_dead_session_overlay(frame: &mut Frame, area: Rect, name: &str) {
     // Center vertically
     let text_h = lines.len() as u16;
     let y_offset = area.height.saturating_sub(text_h) / 2;
+    let text_area = Rect::new(area.x, area.y + y_offset, area.width, text_h.min(area.height));
+
+    frame.render_widget(Paragraph::new(lines), text_area);
+}
+
+/// Overlay de "conectando" com spinner animado
+fn draw_connecting_overlay(frame: &mut Frame, area: Rect, session: &TerminalSession) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(17, 17, 27))),
+        area,
+    );
+
+    // Spinner animado baseado no tempo
+    let elapsed = session.connected_at.elapsed().as_millis();
+    let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spinner = spinner_chars[(elapsed / 100) as usize % spinner_chars.len()];
+
+    let secs = elapsed / 1000;
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(format!("     {} ", spinner), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled("Connecting...", Style::default().fg(TEXT)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("       ", Style::default()),
+            Span::styled(format!("{}@{}:{}", session.server_user, session.server_host, session.server_port), Style::default().fg(SUBTEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("       ", Style::default()),
+            Span::styled(format!("{}s elapsed", secs), Style::default().fg(DIMMED)),
+        ]),
+    ];
+
+    let text_h = lines.len() as u16;
+    let y_offset = area.height.saturating_sub(text_h) / 3;
     let text_area = Rect::new(area.x, area.y + y_offset, area.width, text_h.min(area.height));
 
     frame.render_widget(Paragraph::new(lines), text_area);
