@@ -3,6 +3,7 @@ mod app;
 mod api;
 mod config;
 mod doom;
+mod pong;
 mod filter;
 mod terminal;
 mod ui;
@@ -193,6 +194,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sz = terminal.size()?;
             if let Some(ref mut game) = app.doom {
                 game.tick(sz.width, sz.height);
+            }
+        }
+        // Pong tick
+        if app.mode == AppMode::Pong {
+            let sz = terminal.size()?;
+            if let Some(ref mut game) = app.pong {
+                game.update_dimensions(sz.width, sz.height);
+                game.tick();
             }
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
@@ -600,6 +609,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Char('r') => game.restart(sz.width),
                                 _ => {}
                             }
+                        }
+                        continue;
+                    }
+
+                    AppMode::Pong => {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                app.pong = None;
+                                app.mode = AppMode::Terminal;
+                            }
+                            KeyCode::Up | KeyCode::Char('w') => {
+                                if let Some(ref mut game) = app.pong {
+                                    game.move_up();
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('s') => {
+                                if let Some(ref mut game) = app.pong {
+                                    game.move_down();
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                if let Some(ref mut game) = app.pong {
+                                    game.restart();
+                                }
+                            }
+                            _ => {}
                         }
                         continue;
                     }

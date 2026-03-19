@@ -58,6 +58,8 @@ pub enum AppMode {
     ConfirmDanger,
     /// Easter egg 🎮
     Doom,
+    /// Pong multiplayer 🏓
+    Pong,
 }
 
 pub struct ContextMenu {
@@ -201,6 +203,9 @@ pub struct App {
     // Doom Easter egg
     pub doom: Option<crate::doom::DoomGame>,
 
+    // Pong multiplayer
+    pub pong: Option<crate::pong::PongGame>,
+
     // API client (JWT vive aqui na RAM)
     #[cfg(feature = "api")]
     pub api_client: Option<ApiClient>,
@@ -259,6 +264,7 @@ impl App {
             danger_command: None,
             danger_broadcast: false,
             doom: None,
+            pong: None,
             #[cfg(feature = "api")]
             api_client: None,
             gate_online: true,
@@ -498,6 +504,10 @@ impl App {
                 self.cancel_danger();
             }
             AppMode::Doom => {
+                self.mode = AppMode::Terminal;
+            }
+            AppMode::Pong => {
+                self.pong = None;
                 self.mode = AppMode::Terminal;
             }
         }
@@ -761,6 +771,31 @@ impl App {
             "doom" => {
                 self.doom = Some(crate::doom::DoomGame::new(80));
                 self.mode = AppMode::Doom;
+            }
+            // :pong — Multiplayer Pong 🏓
+            "pong" => {
+                let parts: Vec<&str> = arg.split_whitespace().collect();
+                if parts.is_empty() || parts[0] == "host" {
+                    match crate::pong::PongGame::host(80, 24) {
+                        Ok(game) => {
+                            self.pong = Some(game);
+                            self.mode = AppMode::Pong;
+                        }
+                        Err(e) => {
+                            self.clipboard_msg = Some(format!("Pong error: {}", e));
+                        }
+                    }
+                } else {
+                    match crate::pong::PongGame::client(parts[0], 80, 24) {
+                        Ok(game) => {
+                            self.pong = Some(game);
+                            self.mode = AppMode::Pong;
+                        }
+                        Err(e) => {
+                            self.clipboard_msg = Some(format!("Pong error: {}", e));
+                        }
+                    }
+                }
             }
             // :split — toggle split
             "split" | "sp" => { self.toggle_split(); }

@@ -173,6 +173,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // Pong multiplayer overlay
+    if app.mode == AppMode::Pong {
+        if let Some(ref game) = app.pong {
+            crate::pong::draw_pong(frame, area, game);
+        }
+    }
+
     // Context menu overlay
     if let Some(ref menu) = app.context_menu {
         draw_context_menu(frame, area, menu);
@@ -242,7 +249,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
     draw_sidebar(frame, chunks[0], app);
 
     match app.mode {
-        AppMode::Terminal | AppMode::CommandInput | AppMode::ConfirmDanger => {
+        AppMode::Terminal | AppMode::CommandInput | AppMode::ConfirmDanger | AppMode::Pong => {
             let has_split = app.split.is_some();
             let active_idx = app.active_tab;
 
@@ -1735,6 +1742,13 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
         AppMode::Doom => {
             if let Some(ref game) = app.doom {
                 crate::doom::draw_doom_statusbar(game)
+            } else {
+                Line::from("")
+            }
+        }
+        AppMode::Pong => {
+            if let Some(ref game) = app.pong {
+                crate::pong::draw_pong_statusbar(game)
             } else {
                 Line::from("")
             }
