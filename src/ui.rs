@@ -1396,6 +1396,28 @@ fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
+    // Clipboard message tem prioridade em QUALQUER modo
+    if let Some(ref msg) = app.clipboard_msg {
+        let content = Line::from(vec![
+            Span::styled(
+                " CLIPBOARD ",
+                Style::default()
+                    .fg(Color::Rgb(17, 17, 27))
+                    .bg(GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {} ", msg),
+                Style::default().fg(GREEN),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(content).style(Style::default().bg(STATUS_BG)),
+            area,
+        );
+        return;
+    }
+
     let content = match app.mode {
         AppMode::Search => Line::from(vec![
             Span::styled(
@@ -1488,22 +1510,6 @@ pub fn draw_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             key_hint("i"),
             Span::raw(" Fechar "),
         ]),
-        AppMode::Browse if app.clipboard_msg.is_some() => {
-            let msg = app.clipboard_msg.as_ref().unwrap();
-            Line::from(vec![
-                Span::styled(
-                    " CLIPBOARD ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(GREEN)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" {} ", msg),
-                    Style::default().fg(GREEN),
-                ),
-            ])
-        }
         AppMode::Palette => Line::from(vec![
             Span::styled(
                 " PALETTE ",

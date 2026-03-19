@@ -334,6 +334,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
+                        // Limpa mensagem de clipboard em qualquer tecla
+                        app.clear_clipboard_msg();
+
                         // If active session is dead, handle reconnect/dismiss
                         let session_dead = app.active_session().map(|s| s.is_dead()).unwrap_or(false);
                         if session_dead {
