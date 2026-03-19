@@ -218,6 +218,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
+                        // Se tem context menu aberto, trata clique nele
+                        if app.context_menu.is_some() {
+                            app.context_menu_click(mx, my);
+                            continue;
+                        }
+
+                        // Limpa seleção de texto ao clicar (se tinha)
+                        if app.mouse_select_start.is_some() {
+                            app.mouse_select_start = None;
+                            app.mouse_select_end = None;
+                        }
+
                         // Detecta duplo clique (< 400ms, mesma posição)
                         let is_dblclick = last_click
                             .map(|(lx, ly, t)| {
@@ -288,6 +300,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.mouse_scroll_serverlist(false);
                         }
                     }
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        // Context menu: clique direito
+                        // Se já tem menu aberto, tenta clicar nele primeiro
+                        if app.context_menu_click(mx, my) {
+                            continue;
+                        }
+
+                        if app.mode == AppMode::Terminal && !in_sidebar {
+                            app.open_context_menu_terminal(mx, my);
+                        } else if in_serverlist && app.mode == AppMode::Browse {
+                            app.mouse_click_serverlist(my); // seleciona o item
+                            app.open_context_menu_serverlist(mx, my);
+                        } else if in_sidebar {
+                            app.mouse_click_sidebar(my);
+                            app.open_context_menu_sidebar(mx, my);
+                        }
+                    }
                     MouseEventKind::Drag(MouseButton::Left) => {
                         // Mouse drag: seleção de texto no terminal
                         if app.mode == AppMode::Terminal && !in_sidebar {
@@ -303,23 +332,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     MouseEventKind::Up(MouseButton::Left) => {
-                        // Mouse up: finaliza seleção e copia
+                        // Mouse up: finaliza drag mas MANTÉM seleção visível
                         if app.mouse_selecting {
                             app.mouse_selecting = false;
-                            if let (Some(start), Some(end)) = (app.mouse_select_start, app.mouse_select_end) {
-                                if start != end {
-                                    if let Some(session) = app.active_session() {
-                                        let text = session.copy_selection(start, end);
-                                        if !text.trim().is_empty() {
-                                            if app::copy_to_clipboard(&text) {
-                                                app.clipboard_msg = Some("Seleção copiada!".into());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            app.mouse_select_start = None;
-                            app.mouse_select_end = None;
+                            // Seleção persiste — não limpa start/end
+                            // Será limpa no próximo clique simples
                         }
                     }
                     _ => {}
@@ -328,6 +345,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Event::Key(key) = ev {
+                // Context menu: intercepta TODAS as teclas enquanto aberto
+                if app.context_menu.is_some() {
+                    match key.code {
+                        KeyCode::Esc => app.close_context_menu(),
+                        KeyCode::Up | KeyCode::Char('k') => app.context_menu_up(),
+                        KeyCode::Down | KeyCode::Char('j') => app.context_menu_down(),
+                        KeyCode::Enter => app.context_menu_execute(),
+                        _ => app.close_context_menu(),
+                    }
+                    continue; // SEMPRE continua — nunca cai no match de modo
+                }
+
                 match app.mode {
                     AppMode::Terminal => {
                         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -466,18 +495,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Scroll down 10 lines
                                 if let Some(session) = app.active_session_mut() {
                                     session.scroll_down(10);
-                                }
-                                continue;
-                            }
-                            KeyCode::F(11) => {
-                                // Copy toda a tela visível pro clipboard
-                                if let Some(session) = app.active_session() {
-                                    let text = session.copy_screen();
-                                    if app::copy_to_clipboard(&text) {
-                                        app.clipboard_msg = Some("Tela copiada!".into());
-                                    } else {
-                                        app.clipboard_msg = Some("Falha ao copiar".into());
-                                    }
                                 }
                                 continue;
                             }

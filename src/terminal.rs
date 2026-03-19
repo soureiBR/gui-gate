@@ -227,9 +227,4 @@ impl TerminalSession {
         result
     }
 
-    /// Extrai TODO o texto visível do terminal
-    pub fn copy_screen(&self) -> String {
-        use alacritty_terminal::grid::Dimensions;
-        self.copy_lines(self.term.lock().screen_lines())
-    }
 }

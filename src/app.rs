@@ -56,6 +56,42 @@ pub enum AppMode {
     CommandInput,
 }
 
+pub struct ContextMenu {
+    pub x: u16,
+    pub y: u16,
+    pub items: Vec<ContextMenuItem>,
+    pub selected: usize,
+    #[allow(dead_code)]
+    pub area: ContextArea,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ContextArea {
+    Terminal,
+    ServerList,
+    Sidebar,
+}
+
+#[derive(Clone)]
+pub struct ContextMenuItem {
+    pub label: String,
+    pub action: ContextAction,
+}
+
+#[derive(Clone)]
+pub enum ContextAction {
+    CopySelection,
+    CopyLines(usize),
+    CopyIp,
+    Connect,
+    Disconnect,
+    ServerDetail,
+    Split,
+    Broadcast,
+    Help,
+    Reconnect,
+}
+
 pub struct PaletteItem {
     pub label: String,
     pub description: String,
@@ -141,6 +177,9 @@ pub struct App {
     // Command input
     pub command_input: String,
 
+    // Context menu (right-click)
+    pub context_menu: Option<ContextMenu>,
+
     // Mouse text selection
     pub mouse_selecting: bool,
     pub mouse_select_start: Option<(u16, u16)>,  // (col, row) relativo ao terminal
@@ -194,6 +233,7 @@ impl App {
             help_scroll: 0,
             prev_mode: AppMode::Browse,
             command_input: String::new(),
+            context_menu: None,
             mouse_selecting: false,
             mouse_select_start: None,
             mouse_select_end: None,
@@ -631,13 +671,9 @@ impl App {
         match cmd.as_str() {
             // :copy N — copia últimas N linhas (default: tela inteira)
             "copy" | "c" | "cp" => {
-                let lines: usize = arg.parse().unwrap_or(0);
+                let lines: usize = arg.parse().unwrap_or(50);
                 if let Some(session) = self.active_session() {
-                    let text = if lines > 0 {
-                        session.copy_lines(lines)
-                    } else {
-                        session.copy_screen()
-                    };
+                    let text = session.copy_lines(lines);
                     if copy_to_clipboard(&text) {
                         self.clipboard_msg = Some(
                             if lines > 0 { format!("{} linhas copiadas!", lines) }
@@ -1287,6 +1323,135 @@ impl App {
             split.focused_pane = pane;
             self.active_tab = Some(split.panes[pane]);
         }
+    }
+
+    // ─── Context menu ─────────────────────────────────────────────
+
+    pub fn open_context_menu_terminal(&mut self, x: u16, y: u16) {
+        let mut items = vec![];
+        let is_dead = self.active_session().map(|s| s.is_dead()).unwrap_or(false);
+
+        if is_dead {
+            items.push(ContextMenuItem { label: "Reconectar".into(), action: ContextAction::Reconnect });
+            items.push(ContextMenuItem { label: "Fechar tab".into(), action: ContextAction::Disconnect });
+        } else {
+            // Se tem texto selecionado, mostra opção de copiar seleção
+            if self.mouse_select_start.is_some() && self.mouse_select_end.is_some() {
+                items.push(ContextMenuItem { label: "Copiar".into(), action: ContextAction::CopySelection });
+            }
+            items.push(ContextMenuItem { label: "Copiar 50 linhas".into(), action: ContextAction::CopyLines(50) });
+            items.push(ContextMenuItem { label: "Copiar 100 linhas".into(), action: ContextAction::CopyLines(100) });
+            items.push(ContextMenuItem { label: "Fechar tab".into(), action: ContextAction::Disconnect });
+            if self.tabs.len() >= 2 {
+                items.push(ContextMenuItem { label: "Split".into(), action: ContextAction::Split });
+            }
+            items.push(ContextMenuItem { label: "Broadcast".into(), action: ContextAction::Broadcast });
+        }
+        items.push(ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help });
+
+        self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::Terminal });
+    }
+
+    pub fn open_context_menu_serverlist(&mut self, x: u16, y: u16) {
+        let items = vec![
+            ContextMenuItem { label: "Conectar".into(), action: ContextAction::Connect },
+            ContextMenuItem { label: "Copiar IP".into(), action: ContextAction::CopyIp },
+            ContextMenuItem { label: "Detalhes".into(), action: ContextAction::ServerDetail },
+            ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help },
+        ];
+        self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::ServerList });
+    }
+
+    pub fn open_context_menu_sidebar(&mut self, x: u16, y: u16) {
+        let items = vec![
+            ContextMenuItem { label: "Abrir".into(), action: ContextAction::Connect },
+            ContextMenuItem { label: "Ajuda".into(), action: ContextAction::Help },
+        ];
+        self.context_menu = Some(ContextMenu { x, y, items, selected: 0, area: ContextArea::Sidebar });
+    }
+
+    pub fn context_menu_up(&mut self) {
+        if let Some(ref mut menu) = self.context_menu {
+            if menu.selected > 0 { menu.selected -= 1; }
+        }
+    }
+
+    pub fn context_menu_down(&mut self) {
+        if let Some(ref mut menu) = self.context_menu {
+            if menu.selected + 1 < menu.items.len() { menu.selected += 1; }
+        }
+    }
+
+    pub fn context_menu_execute(&mut self) {
+        let menu = match self.context_menu.take() {
+            Some(m) => m,
+            None => return,
+        };
+        let action = match menu.items.get(menu.selected) {
+            Some(item) => item.action.clone(),
+            None => return,
+        };
+
+        match action {
+            ContextAction::CopySelection => {
+                if let (Some(start), Some(end)) = (self.mouse_select_start, self.mouse_select_end) {
+                    if let Some(session) = self.active_session() {
+                        let text = session.copy_selection(start, end);
+                        if !text.trim().is_empty() && copy_to_clipboard(&text) {
+                            self.clipboard_msg = Some("Seleção copiada!".into());
+                        }
+                    }
+                }
+                self.mouse_select_start = None;
+                self.mouse_select_end = None;
+            }
+            ContextAction::CopyLines(n) => {
+                if let Some(session) = self.active_session() {
+                    let text = session.copy_lines(n);
+                    if copy_to_clipboard(&text) {
+                        self.clipboard_msg = Some(format!("{} linhas copiadas!", n));
+                    }
+                }
+            }
+            ContextAction::CopyIp => { self.copy_ip(); }
+            ContextAction::Connect => { self.enter_nav(); }
+            ContextAction::Disconnect => { self.close_active_tab(); }
+            ContextAction::ServerDetail => { self.show_detail(); }
+            ContextAction::Split => { self.toggle_split(); }
+            ContextAction::Broadcast => { self.toggle_broadcast(); }
+            ContextAction::Help => { self.show_help(); }
+            ContextAction::Reconnect => { self.reconnect_active(); }
+        }
+    }
+
+    pub fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+
+    pub fn context_menu_click(&mut self, mx: u16, my: u16) -> bool {
+        if let Some(ref menu) = self.context_menu {
+            let menu_w = 22u16;
+            let menu_h = menu.items.len() as u16 + 2; // +2 bordas
+            let menu_x = menu.x;
+            let menu_y = menu.y;
+
+            if mx >= menu_x && mx < menu_x + menu_w && my >= menu_y && my < menu_y + menu_h {
+                let idx = (my.saturating_sub(menu_y + 1)) as usize; // +1 pela borda top
+                if idx < menu.items.len() {
+                    // Clone the needed info before mutable borrow
+                    let selected = idx;
+                    if let Some(ref mut m) = self.context_menu {
+                        m.selected = selected;
+                    }
+                    self.context_menu_execute();
+                    return true;
+                }
+            }
+            // Clique fora do menu — fecha
+            self.context_menu = None;
+            return true;
+        }
+        false
     }
 
     /// Scroll no sidebar

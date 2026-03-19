@@ -165,6 +165,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == AppMode::Help {
         draw_help_popup(frame, area, app);
     }
+
+    // Context menu overlay
+    if let Some(ref menu) = app.context_menu {
+        draw_context_menu(frame, area, menu);
+    }
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
@@ -747,13 +752,10 @@ fn draw_terminal_panel_by_idx(frame: &mut Frame, area: Rect, app: &mut App, tab_
     if session.is_dead() {
         draw_dead_session_overlay(frame, inner, &session.name);
     } else {
-        let selection = if app.mouse_selecting {
-            match (app.mouse_select_start, app.mouse_select_end) {
-                (Some(s), Some(e)) => Some((s, e)),
-                _ => None,
-            }
-        } else {
-            None
+        // Mostra seleção se tem start+end (durante ou depois do drag)
+        let selection = match (app.mouse_select_start, app.mouse_select_end) {
+            (Some(s), Some(e)) if s != e => Some((s, e)),
+            _ => None,
         };
         frame.render_widget(TermWidget { session, selection }, inner);
     }
@@ -1391,6 +1393,64 @@ fn draw_help_popup(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     frame.render_widget(Paragraph::new(visible_lines), inner);
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+
+fn draw_context_menu(frame: &mut Frame, area: Rect, menu: &crate::app::ContextMenu) {
+    // Calcula largura baseado no item mais longo
+    let max_label = menu.items.iter().map(|i| i.label.len()).max().unwrap_or(10);
+    let menu_w = (max_label as u16 + 6).max(20); // +6 pra marker + padding + bordas
+    let menu_h = menu.items.len() as u16 + 2;
+
+    // Ajusta posição pra não sair da tela
+    let x = menu.x.min(area.right().saturating_sub(menu_w));
+    let y = menu.y.min(area.bottom().saturating_sub(menu_h));
+    let menu_area = Rect::new(x, y, menu_w, menu_h);
+
+    // Limpa TODA a área por trás — preenche cada célula
+    let buf = frame.buffer_mut();
+    let bg = Color::Rgb(24, 24, 37);
+    for row in menu_area.top()..menu_area.bottom() {
+        for col in menu_area.left()..menu_area.right() {
+            if let Some(cell) = buf.cell_mut((col, row)) {
+                cell.set_char(' ');
+                cell.set_style(Style::default().bg(bg));
+            }
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(bg));
+
+    let items: Vec<ListItem> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let is_selected = i == menu.selected;
+            let style = if is_selected {
+                Style::default()
+                    .fg(HIGHLIGHT_FG)
+                    .bg(HIGHLIGHT_BG)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(SUBTEXT).bg(bg)
+            };
+            let marker = if is_selected { " ▸ " } else { "   " };
+            // Pad com espaços pra cobrir toda a largura
+            let text = format!("{}{}", marker, item.label);
+            let padded = format!("{:<width$}", text, width = (menu_w - 2) as usize);
+            ListItem::new(padded).style(style)
+        })
+        .collect();
+
+    let inner = block.inner(menu_area);
+    frame.render_widget(block, menu_area);
+    frame.render_widget(List::new(items), inner);
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
