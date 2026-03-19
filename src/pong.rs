@@ -197,7 +197,7 @@ impl PongGame {
             None => return,
         };
 
-        let mut buf = [0u8; 25];
+        let mut buf = [0u8; 33];
         let my_paddle = match self.role {
             PongRole::Host => self.paddle_left_y,
             PongRole::Client => self.paddle_right_y,
@@ -209,13 +209,11 @@ impl PongGame {
         buf[16..20].copy_from_slice(&self.ball_dy.to_le_bytes());
         buf[20] = self.score_left;
         buf[21] = self.score_right;
-        buf[22] = if self.game_active && self.winner.is_none() {
-            1
-        } else {
-            0
-        };
+        buf[22] = if self.game_active && self.winner.is_none() { 1 } else { 0 };
         buf[23] = self.winner.unwrap_or(0);
-        // buf[24] reserved
+        // Host envia suas dimensões pra sincronizar
+        buf[24..28].copy_from_slice(&self.width.to_le_bytes());
+        buf[28..32].copy_from_slice(&self.height.to_le_bytes());
 
         let _ = socket.send_to(&buf, addr);
     }
@@ -225,7 +223,7 @@ impl PongGame {
             Some(s) => s,
             None => return,
         };
-        let mut buf = [0u8; 25];
+        let mut buf = [0u8; 33];
 
         while let Ok((n, addr)) = socket.recv_from(&mut buf) {
             // Host: first packet from client = connection
@@ -265,6 +263,15 @@ impl PongGame {
                     self.game_active = buf[22] != 0;
                     if n >= 24 && buf[23] != 0 {
                         self.winner = Some(buf[23]);
+                    }
+                    // Sincroniza dimensões com o host
+                    if n >= 32 {
+                        let host_w = f32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
+                        let host_h = f32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]);
+                        if host_w > 0.0 && host_h > 0.0 {
+                            self.width = host_w;
+                            self.height = host_h;
+                        }
                     }
                 }
             }
@@ -308,8 +315,12 @@ impl PongGame {
     }
 
     pub fn update_dimensions(&mut self, width: u16, height: u16) {
-        self.width = width as f32;
-        self.height = height as f32;
+        // Só o host define as dimensões do jogo
+        // O client recebe via rede pra manter sincronizado
+        if self.role == PongRole::Host {
+            self.width = width as f32;
+            self.height = height as f32;
+        }
     }
 }
 
@@ -351,7 +362,7 @@ fn get_mesh_ip() -> Option<String> {
 pub fn draw_pong(frame: &mut Frame, area: Rect, game: &PongGame) {
     let buf = frame.buffer_mut();
 
-    // Clear with dark green background
+    // Clear toda a tela com bg
     for row in area.top()..area.bottom() {
         for col in area.left()..area.right() {
             if let Some(cell) = buf.cell_mut((col, row)) {
@@ -361,6 +372,25 @@ pub fn draw_pong(frame: &mut Frame, area: Rect, game: &PongGame) {
         }
     }
 
+    // Usa as dimensões do jogo (do host) pra criar uma game area centrada
+    let game_w = (game.width as u16).min(area.width);
+    let game_h = (game.height as u16).min(area.height);
+    let offset_x = (area.width.saturating_sub(game_w)) / 2;
+    let offset_y = (area.height.saturating_sub(game_h)) / 2;
+    let game_area = Rect::new(area.x + offset_x, area.y + offset_y, game_w, game_h);
+
+    // Borda da area de jogo
+    for col in game_area.left()..game_area.right() {
+        put_char_abs(buf, col, game_area.top(), '─', NET_COLOR);
+        put_char_abs(buf, col, game_area.bottom().saturating_sub(1), '─', NET_COLOR);
+    }
+    for row in game_area.top()..game_area.bottom() {
+        put_char_abs(buf, game_area.left(), row, '│', NET_COLOR);
+        put_char_abs(buf, game_area.right().saturating_sub(1), row, '│', NET_COLOR);
+    }
+
+    // Agora usa game_area em vez de area pra tudo
+    let area = game_area;
     let w = area.width;
     let h = area.height;
 
@@ -502,6 +532,13 @@ pub fn draw_pong_statusbar(game: &PongGame) -> Line<'static> {
 }
 
 // ── Render helpers ───────────────────────────────────────────────────────────
+
+fn put_char_abs(buf: &mut Buffer, x: u16, y: u16, ch: char, color: Color) {
+    if let Some(cell) = buf.cell_mut((x, y)) {
+        cell.set_char(ch);
+        cell.set_style(Style::default().fg(color).bg(BG));
+    }
+}
 
 fn put_char(buf: &mut Buffer, area: Rect, x: u16, y: u16, ch: char, color: Color) {
     let ax = area.x + x;
