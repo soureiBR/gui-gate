@@ -1502,8 +1502,57 @@ enum PaletteActionData {
 
 // ── Clipboard helper ─────────────────────────────────────────────────────────
 
-/// Tenta copiar pro clipboard. Retorna (sucesso, mensagem_erro)
-pub fn copy_to_clipboard(text: &str) -> bool {
+/// Base64 encode simples (sem crate extra)
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Tenta copiar via OSC 52 (escape sequence pro terminal pai)
+/// Funciona em: Alacritty, Kitty, WezTerm, Windows Terminal, foot, etc.
+fn try_osc52(text: &str) -> bool {
+    use std::io::Write;
+    let b64 = base64_encode(text.as_bytes());
+    // ESC ] 52 ; c ; <base64> BEL
+    let seq = format!("\x1b]52;c;{}\x07", b64);
+    // Escreve direto no /dev/tty (terminal pai, não stdout que o ratatui controla)
+    #[cfg(unix)]
+    {
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            return tty.write_all(seq.as_bytes()).is_ok();
+        }
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::io::stderr().write_all(seq.as_bytes());
+        return true;
+    }
+    #[cfg(not(any(unix, windows)))]
+    { false }
+}
+
+/// Tenta copiar via comandos externos (xclip, xsel, wl-copy, etc)
+fn try_external_clipboard(text: &str) -> bool {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -1513,8 +1562,7 @@ pub fn copy_to_clipboard(text: &str) -> bool {
             ("xclip", &["-selection", "clipboard"]),
             ("xsel", &["--clipboard", "--input"]),
             ("wl-copy", &[]),
-            ("clip.exe", &[]),  // WSL
-            ("xdg-clipboard", &["copy"]),
+            ("clip.exe", &[]),
         ];
         for &(cmd, args) in commands {
             if let Ok(mut child) = Command::new(cmd)
@@ -1560,4 +1608,17 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         }
         false
     }
+}
+
+/// Copia pro clipboard — tenta OSC 52 primeiro, depois comandos externos
+pub fn copy_to_clipboard(text: &str) -> bool {
+    // 1. Tenta OSC 52 (funciona sem instalar nada em terminais modernos)
+    //    Sempre tenta — se o terminal não suporta, ignora silenciosamente
+    let osc52_sent = try_osc52(text);
+
+    // 2. Tenta comandos externos como backup (xclip, xsel, wl-copy, etc)
+    let external = try_external_clipboard(text);
+
+    // Sucesso se qualquer um funcionou
+    osc52_sent || external
 }
